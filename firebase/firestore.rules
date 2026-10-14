@@ -20,6 +20,39 @@ service cloud.firestore {
         && request.resource.data.emails is list && request.resource.data.emails.size() == 6
         && request.resource.data.patterns is map;
     }
+    function staffSelf(uid) {
+      return verified() && request.auth.uid == uid
+        && request.auth.token.email in get(/databases/$(database)/documents/settings/clinic).data.emails;
+    }
+    function validStart(data) {
+      return data.keys().hasOnly(['day','clockIn','clockOut'])
+        && data.day is int
+        && data.day == int((request.time.toMillis() + 32400000) / 86400000)
+        && data.clockIn == request.time && data.clockOut == null;
+    }
+    function validEnd() {
+      return resource.data.clockOut == null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clockOut'])
+        && request.resource.data.clockOut == request.time
+        && request.time >= resource.data.clockIn;
+    }
+    match /attendance/{uid} {
+      allow read: if admin() || staffSelf(uid);
+      allow create: if staffSelf(uid) && validStart(request.resource.data)
+        && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data;
+      allow update: if staffSelf(uid)
+        && (validEnd() || (resource.data.clockOut != null
+          && request.resource.data.day > resource.data.day && validStart(request.resource.data)))
+        && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data;
+      match /days/{day} {
+        allow read: if admin() || staffSelf(uid);
+        allow create: if staffSelf(uid) && validStart(request.resource.data)
+          && day == string(request.resource.data.day)
+          && getAfter(/databases/$(database)/documents/attendance/$(uid)).data == request.resource.data;
+        allow update: if staffSelf(uid) && validEnd()
+          && getAfter(/databases/$(database)/documents/attendance/$(uid)).data == request.resource.data;
+      }
+    }
     match /shifts/{shiftId} {
       allow read: if member();
       allow create, update: if admin()

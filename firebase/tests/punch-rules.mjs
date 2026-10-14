@@ -1,0 +1,45 @@
+import {readFileSync} from 'node:fs';
+import assert from 'node:assert/strict';
+import {initializeTestEnvironment,assertSucceeds,assertFails} from '@firebase/rules-unit-testing';
+import {doc,setDoc,getDoc,writeBatch,serverTimestamp,Timestamp,runTransaction,deleteDoc} from 'firebase/firestore';
+const env=await initializeTestEnvironment({projectId:'demo-odc',firestore:{host:'127.0.0.1',port:8080,rules:readFileSync(new URL('../firestore.rules',import.meta.url),'utf8')}});
+const token=email=>({email,email_verified:true,firebase:{sign_in_provider:'google.com'}});
+const a=env.authenticatedContext('a',token('a@example.com')).firestore();
+const b=env.authenticatedContext('b',token('b@example.com')).firestore();
+const outsider=env.authenticatedContext('x',token('x@example.com')).firestore();
+const day=Math.floor((Date.now()+32400000)/86400000);
+const state=db=>doc(db,'attendance','a');
+const hist=(db,d=day)=>doc(db,'attendance','a','days',String(d));
+const save=(db,data)=>{const batch=writeBatch(db);batch.set(state(db),data);batch.set(hist(db,data.day),data);return batch.commit();};
+try {
+ await env.withSecurityRulesDisabled(async c=>setDoc(doc(c.firestore(),'settings','clinic'),{emails:['a@example.com','b@example.com','','','',''],staff:['a','b','','','',''],patterns:{}}));
+ await assertSucceeds(getDoc(state(a)));
+ await assertFails(getDoc(state(b)));
+ await assertFails(getDoc(state(outsider)));
+ const admin=env.authenticatedContext('admin',token('omotesandodc@gmail.com')).firestore();
+ await assertSucceeds(getDoc(state(admin)));
+ await assertFails(save(admin,{day,clockIn:serverTimestamp(),clockOut:null}));
+ await assertFails(getDoc(state(env.unauthenticatedContext().firestore())));
+ await assertFails(save(b,{day,clockIn:serverTimestamp(),clockOut:null}));
+ await assertFails(save(a,{day,clockIn:Timestamp.fromMillis(0),clockOut:null}));
+ await assertFails(save(a,{day:day-1,clockIn:serverTimestamp(),clockOut:null}));
+ await assertFails(setDoc(state(a),{day,clockIn:serverTimestamp(),clockOut:null}));
+ const start=()=>runTransaction(a,async tx=>{const snap=await tx.get(state(a));if(snap.exists())throw Error('duplicate');const data={day,clockIn:serverTimestamp(),clockOut:null};tx.set(state(a),data);tx.set(hist(a),data);});
+ const results=await Promise.allSettled([start(),start()]);assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+ const data=(await getDoc(state(a))).data();
+ await assertFails(save(a,{day,clockIn:serverTimestamp(),clockOut:null}));
+ await assertFails(save(a,{...data,clockIn:Timestamp.fromMillis(0),clockOut:serverTimestamp()}));
+ await assertFails(setDoc(state(a),{...data,clockOut:serverTimestamp()}));
+ await assertSucceeds(save(a,{...data,clockOut:serverTimestamp()}));
+ await assertFails(save(a,{...data,clockOut:serverTimestamp()}));
+ await assertFails(deleteDoc(hist(a)));
+ await assertFails(save(a,{day,clockIn:serverTimestamp(),clockOut:null}));
+ // An unclosed prior-day shift blocks a new shift, but permits checkout today.
+ await env.withSecurityRulesDisabled(async c=>{const db=c.firestore(),data={day:day-1,clockIn:Timestamp.fromMillis(Date.now()-86400000),clockOut:null};await save(db,data);});
+ await assertFails(save(a,{day,clockIn:serverTimestamp(),clockOut:null}));
+ const old=(await getDoc(state(a))).data();await assertSucceeds(save(a,{...old,clockOut:serverTimestamp()}));
+ await env.withSecurityRulesDisabled(async c=>deleteDoc(hist(c.firestore())));
+ await assertSucceeds(save(a,{day,clockIn:serverTimestamp(),clockOut:null}));
+ await assertFails(save(a,{...old,clockOut:serverTimestamp()}));
+ console.log('PASS: own read, unauthorized access, timestamps, date validation, atomic history, concurrent duplicate, immutable in/out, midnight checkout');
+} finally {await env.cleanup();}

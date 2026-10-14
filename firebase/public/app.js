@@ -1,6 +1,6 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
-import { getFirestore, doc, collection, onSnapshot, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+import { getFirestore, doc, collection, onSnapshot, getDoc, setDoc, serverTimestamp, runTransaction } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from './firebase-config.js';
 
 const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
@@ -12,7 +12,11 @@ let config = structuredClone(base), shifts = {}, unsubscribers = [], generation 
 let y = new Date().getFullYear(), m = new Date().getMonth(), selected = '';
 const pad = n => String(n).padStart(2,'0'), dateKey = d => `${y}-${pad(m+1)}-${pad(d)}`;
 const message = s => { $('status').textContent = s; };
+let punchState = null, punchReady = false, punchBusy = false;
+const workDay = () => Math.floor((Date.now() + 9*3600000)/86400000);
 function clearData() {
+  punchState = null; punchReady = false; renderPunch();
+  $('punchHistory').replaceChildren();
   unsubscribers.forEach(f => f()); unsubscribers = []; ready = false;
   shifts = {}; config = structuredClone(base); $('app').hidden = true;
   $('grid').replaceChildren(); $('staffFields').replaceChildren(); $('patterns').replaceChildren();
@@ -47,8 +51,21 @@ onAuthStateChanged(auth, async user => {
       config = snap.data();
       if (!admin && !config.emails.includes(user.email)) { failed({code:'permission-denied'}); return; }
       $('toggle').hidden = !admin;
-      render(); if ($('settings').classList.contains('hidden')) settings();
+      render(); renderPunch(); if ($('settings').classList.contains('hidden')) settings();
     }, failed));
+    unsubscribers.push(onSnapshot(doc(db,'attendance',user.uid), snap => {
+      if (current !== generation) return;
+      punchState = snap.exists() ? snap.data() : null; punchReady = true; renderPunch();
+    }, e => { if (current === generation) { punchReady=false; renderPunch(); $('punchStatus').textContent=`打刻を読み込めません（${e.code}）。`; } }));
+    unsubscribers.push(onSnapshot(collection(db,'attendance',user.uid,'days'), snap => {
+      if (current !== generation) return;
+      $('punchHistory').replaceChildren();
+      snap.docs.map(d=>d.data()).sort((a,b)=>b.day-a.day).slice(0,31).forEach(data=>{
+        const line=document.createElement('li');
+        line.textContent=`出勤 ${stamp(data.clockIn)} ／ 退勤 ${data.clockOut ? stamp(data.clockOut) : '未打刻'}`;
+        $('punchHistory').append(line);
+      });
+    }, e => { if(current===generation) $('punchStatus').textContent=`履歴を読み込めません（${e.code}）。`; }));
     unsubscribers.push(onSnapshot(collection(db,'shifts'), snap => {
       if (current !== generation) return;
       shifts = Object.fromEntries(snap.docs.map(d => [d.id,d.data()])); ready = true;
@@ -136,3 +153,42 @@ $('export').onclick=()=>{
   download(`ODC_シフト_${y}_${pad(m+1)}.csv`,rows.map(r=>r.map(escape).join(',')).join('\r\n'),'text/csv;charset=utf-8');
 };
 $('backup').onclick=()=>{if(ready)download('ODC_共有シフト.json',JSON.stringify({config,shifts},null,2),'application/json');};
+
+function stamp(value) {
+  return value?.toDate ? value.toDate().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '確認中';
+}
+function renderPunch() {
+  const registered = !!auth.currentUser && config.emails.includes(auth.currentUser.email);
+  const open = punchState && !punchState.clockOut;
+  $('clockIn').disabled = !registered || !punchReady || punchBusy || !!open || (punchState?.day >= workDay());
+  $('clockOut').disabled = !registered || !punchReady || punchBusy || !open;
+  $('punchStatus').textContent = !registered ? '打刻はスタッフ設定に登録した本人のGoogleアカウントで行ってください。' : !punchReady ? '打刻を読み込んでいます…' : open ? `出勤済み：${stamp(punchState.clockIn)}${punchState.day < workDay() ? '（前日以前の退勤が未打刻です。実際の退勤時刻と異なる場合は管理者に連絡してください。）' : ''}` : punchState?.day === workDay() ? `本日は退勤済み：${stamp(punchState.clockOut)}` : '本日はまだ出勤していません。';
+}
+async function punch(kind) {
+  const user=auth.currentUser, current=generation;
+  if(!user || !punchReady || punchBusy || !config.emails.includes(user.email)) return;
+  if(kind==='out' && !confirm('退勤を記録しますか？')) return;
+  punchBusy=true; renderPunch(); $('punchStatus').textContent='打刻を保存中…';
+  try {
+    const ref=doc(db,'attendance',user.uid), day=workDay();
+    await runTransaction(db, async tx=>{
+      const snap=await tx.get(ref), previous=snap.exists()?snap.data():null;
+      let data;
+      if(kind==='in') {
+        if(previous && (!previous.clockOut || previous.day>=day)) throw new Error('すでに出勤済みです。本日は再出勤できません。');
+        data={day,clockIn:serverTimestamp(),clockOut:null};
+      } else {
+        if(!previous || previous.clockOut) throw new Error('退勤済み、または出勤記録がありません。');
+        data={...previous,clockOut:serverTimestamp()};
+      }
+      tx.set(ref,data);
+      tx.set(doc(db,'attendance',user.uid,'days',String(data.day)),data);
+    });
+    if(current===generation) message(`${kind==='in'?'出勤':'退勤'}を保存しました。`);
+  } catch(e) {
+    if(current===generation) message(e.code ? `打刻できませんでした（${e.code}）。通信・端末の日付を確認してください。保存済みか履歴を確認してから再度お試しください。` : e.message);
+  } finally { punchBusy=false; renderPunch(); }
+}
+$('clockIn').onclick=()=>punch('in');
+$('clockOut').onclick=()=>punch('out');
+setInterval(()=>{ if(auth.currentUser && !punchBusy) renderPunch(); },30000);
