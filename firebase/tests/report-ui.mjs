@@ -59,12 +59,16 @@ try{
  assert.equal($('reportRows').querySelector('input').disabled,true);
  [...$('reportRows').rows[0].querySelectorAll('button')].find(b=>b.textContent==='時刻修正').onclick();
  $('correctionOut').value='2026-10-15T16:10';$('correctionReason').value='本人が退勤時刻を訂正';await $('correctionSave').onclick();
- assert.match($('reportRows').textContent,/本人修正あり/);
+ assert.doesNotMatch($('reportRows').textContent,/本人修正あり/);assert.match($('requestRows').textContent,/承認待ち/);
+ assert.match($('reportRows').textContent,/3:38/);
  $('reportMonth').onchange();await $('loadReport').onclick();assert.match($('attendanceTitle').textContent,/自分/);
  own.reset();
  const adminAgain=setupAttendance({db,auth:{currentUser:{uid:'admin'}},getConfig:()=>config,download:()=>{}});
  adminAgain.reset(true);$('reportMonth').value='2026-10';await $('loadReport').onclick();
- assert.match($('reportRows').textContent,/本人修正あり/);assert.match($('reportRows').textContent,/管理者修正あり/);
+ await $('refreshRequests').onclick();
+ assert.match($('requestRows').textContent,/本人が退勤時刻を訂正/);
+ await [...$('requestRows').querySelectorAll('button')].find(b=>b.textContent==='承認').onclick();
+ assert.match($('reportRows').textContent,/本人修正あり/);assert.match($('reportRows').textContent,/管理者修正あり/);assert.match($('reportRows').textContent,/3:48/);
  await [...$('reportRows').rows[0].querySelectorAll('button')].find(b=>b.textContent==='修正履歴').onclick();
  assert.match($('correctionHistory').textContent,/本人が退勤時刻を訂正/);
  console.log('PASS UI: server load, rest save, calculated totals, two CSVs, empty month, stale request cleared on logout');

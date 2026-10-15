@@ -49,7 +49,7 @@ service cloud.firestore {
     function validCorrection(uid) {
       let data = request.resource.data;
       let log = getAfter(/databases/$(database)/documents/attendance/$(uid)/corrections/$(data.correctionId)).data;
-      return (admin() || staffSelf(uid))
+      return admin()
         && data.keys().hasOnly(['day','clockIn','clockOut','correctionId'])
         && data.day is int && data.clockIn is timestamp
         && data.day == int((data.clockIn.toMillis() + 32400000) / 86400000)
@@ -57,6 +57,41 @@ service cloud.firestore {
         && (data.clockOut == null || (data.clockOut is timestamp && data.clockOut >= data.clockIn && data.clockOut <= request.time))
         && log.after == data && log.updatedAt == request.time
         && !exists(/databases/$(database)/documents/attendance/$(uid)/corrections/$(data.correctionId));
+    }
+    function approvedRequest(uid, log) {
+      let application = getAfter(/databases/$(database)/documents/correctionRequests/$(log.requestId)).data;
+      return application.uid == uid && application.status == 'approved'
+        && application.reviewedBy == request.auth.uid && application.reviewedAt == request.time
+        && application.correctionId == log.after.correctionId
+        && application.day == log.day && application.before == log.before
+        && application.reason == log.reason
+        && application.proposed.clockIn == log.after.clockIn && application.proposed.clockOut == log.after.clockOut;
+    }
+    match /correctionRequests/{id} {
+      allow read: if admin() || staffSelf(resource.data.uid);
+      allow create: if staffSelf(request.resource.data.uid)
+        && request.resource.data.keys().hasOnly(['uid','day','before','proposed','reason','status','createdBy','createdAt'])
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time && request.resource.data.status == 'pending'
+        && request.resource.data.reason is string && request.resource.data.reason.size() > 0 && request.resource.data.reason.size() <= 200
+        && request.resource.data.day is int
+        && request.resource.data.proposed.keys().hasOnly(['day','clockIn','clockOut'])
+        && request.resource.data.proposed.day == request.resource.data.day
+        && request.resource.data.proposed.clockIn is timestamp
+        && request.resource.data.proposed.clockIn <= request.time
+        && request.resource.data.day == int((request.resource.data.proposed.clockIn.toMillis() + 32400000) / 86400000)
+        && (request.resource.data.proposed.clockOut == null || (request.resource.data.proposed.clockOut is timestamp
+          && request.resource.data.proposed.clockOut >= request.resource.data.proposed.clockIn && request.resource.data.proposed.clockOut <= request.time))
+        && (exists(/databases/$(database)/documents/attendance/$(request.resource.data.uid)/days/$(string(request.resource.data.day)))
+          ? request.resource.data.before == get(/databases/$(database)/documents/attendance/$(request.resource.data.uid)/days/$(string(request.resource.data.day))).data
+          : request.resource.data.before == null);
+      allow update: if admin() && resource.data.status == 'pending'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','reviewedBy','reviewedAt','correctionId'])
+        && request.resource.data.reviewedBy == request.auth.uid && request.resource.data.reviewedAt == request.time
+        && (request.resource.data.status == 'rejected' || (request.resource.data.status == 'approved'
+          && getAfter(/databases/$(database)/documents/attendance/$(resource.data.uid)/corrections/$(request.resource.data.correctionId)).data.requestId == id
+          && getAfter(/databases/$(database)/documents/attendance/$(resource.data.uid)/corrections/$(request.resource.data.correctionId)).data.updatedAt == request.time
+          && !exists(/databases/$(database)/documents/attendance/$(resource.data.uid)/corrections/$(request.resource.data.correctionId))));
     }
     match /attendance/{uid} {
       allow read: if admin() || staffSelf(uid);
@@ -74,8 +109,9 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data;
       match /corrections/{id} {
         allow read: if admin() || staffSelf(uid);
-        allow create: if (admin() || staffSelf(uid))
-          && request.resource.data.keys().hasOnly(['day','before','after','reason','updatedBy','updatedAt'])
+        allow create: if admin()
+          && request.resource.data.keys().hasOnly(['day','before','after','reason','updatedBy','updatedAt','requestId'])
+          && (!('requestId' in request.resource.data) || approvedRequest(uid,request.resource.data))
           && request.resource.data.day is int
           && request.resource.data.updatedBy == request.auth.uid
           && request.resource.data.updatedAt == request.time

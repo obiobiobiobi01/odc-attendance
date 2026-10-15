@@ -48,7 +48,7 @@ firebase init は不要です。設定ファイルを用意しています。
 ```sh
 npm install --no-save firebase@12.19.0 @firebase/rules-unit-testing@5 jsdom
 node tests/report-calculation.mjs
-firebase emulators:exec --only firestore --project demo-odc "node tests/punch-rules.mjs && node tests/report-rules.mjs && node tests/correction-rules.mjs && node tests/report-ui.mjs"
+firebase emulators:exec --only firestore --project demo-odc "node tests/punch-rules.mjs && node tests/report-rules.mjs && node tests/correction-rules.mjs && node tests/approval-rules.mjs && node tests/report-ui.mjs"
 ```
 
 Firestoreエミュレータをlocalhost:8080で起動できる環境が必要です。テストは本番プロジェクトへ接続しません。
@@ -61,8 +61,8 @@ Firestoreエミュレータをlocalhost:8080で起動できる環境が必要で
 
 日別記録と必要に応じ現在の打刻状態を同時更新します。attendance/{uid}/corrections/{id}に変更前後・理由・管理者UID・サーバー保存時刻を同時保存し、履歴の更新・削除は禁止します。元データはこの履歴で保持します。別画面や本人の打刻と競合したら再表示を求めます。時刻修正後は休憩を維持し、勤務時間を超える休憩は未確認として合計から除外します。本人の履歴にも修正後時刻が反映されます。
 
-## 本人による打刻修正
+## 本人による打刻修正申請
 
-登録スタッフも自分の記録だけを追加・修正できます。自分の月別一覧から操作し、理由は必須です。Firestoreルールで本人のUIDと登録メールを確認し、他人の記録・履歴へのアクセス、修正者の偽装、履歴の上書き・削除を拒否します。管理者は引き続き全員の記録を修正できます。
+登録スタッフは自分の記録だけを追加・修正申請できます。自分の月別一覧から操作し、理由は必須です。Firestoreルールで本人のUIDと登録メールを確認し、他人の記録・履歴へのアクセス、修正者の偽装、履歴の上書き・削除を拒否します。管理者は引き続き全員の記録を修正できます。
 
-一覧と明細CSVの状態に「本人修正あり」「管理者修正あり」を表示します。後から管理者が再修正しても本人修正の印は残します。「修正履歴」で変更前後・理由・本人／管理者・日時を確認できます。本人修正は保存時に即時反映され、管理者の承認待ちにはなりません。休憩の変更・自動入力は管理者専用です。
+一覧と明細CSVの状態に「本人修正あり」「管理者修正あり」を表示します。後から管理者が再修正しても本人修正の印は残します。「修正履歴」で変更前後・理由・本人／管理者・日時を確認できます。本人の申請はcorrectionRequestsへ承認待ちとして保存され、管理者承認まで正式な記録・実働集計には反映しません。管理者画面は全月の承認待ち申請を一覧表示し、変更前後・本人・理由・申請日時を確認して「承認」「却下」をワンクリックで選べます。承認は申請状態・正式記録・修正履歴をトランザクションで同時保存します。却下時は正式な記録を変更しません。本人は自分の申請の承認待ち／承認済み／却下を確認できます。二重処理と、申請後に正式記録が変わった場合の上書きを拒否します。旧版ですでに正式保存した修正はそのまま維持します。休憩の変更・自動入力は管理者専用です。

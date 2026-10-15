@@ -16,7 +16,7 @@ try{
  assert.equal(saved.clockOut.toMillis(),clockOut.toMillis());assert.deepEqual((await getDoc(doc(db,'attendance','a'))).data(),saved);
  const logs=await getDocs(collection(db,'attendance','a','corrections'));assert.equal(logs.size,1);assert.equal(logs.docs[0].data().before,null);
  await assertFails(updateDoc(logs.docs[0].ref,{reason:'changed'}));await assertFails(deleteDoc(logs.docs[0].ref));
- await saveCorrection({...args,db:staff,adminUid:'a',expected:saved});saved=(await getDoc(path)).data();
+ await assertFails(saveCorrection({...args,db:staff,adminUid:'a',expected:saved}));
  await assertFails(saveCorrection({...args,db:staff,uid:'b',adminUid:'a',expected:null}));
  await assertFails(saveCorrection({...args,db:staff,adminUid:'admin',expected:saved}));
  await assertFails(getDoc(doc(staff,'attendance','b','days',String(day))));

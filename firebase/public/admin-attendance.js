@@ -1,4 +1,4 @@
-import {localTime,parseTime,saveCorrection} from './attendance-correction.js';
+import {localTime,parseTime,saveCorrection,submitCorrection,rejectCorrection} from './attendance-correction.js';
 import {collection,doc,getDocFromServer,getDocsFromServer,query,where,runTransaction,serverTimestamp} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import {monthRange,dayLabel,duration,calculate,totals,csv} from './attendance-report.js';
 export function setupAttendance({db,auth,getConfig,download}) {
@@ -9,16 +9,19 @@ export function setupAttendance({db,auth,getConfig,download}) {
   const stamp=t=>t?.toDate ? t.toDate().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
   function reset(adminMode=false,uid=null) {
     isAdmin=adminMode;selfUid=uid;const enabled=adminMode||!!uid;
-    $('attendanceTitle').textContent=isAdmin?'管理者用・打刻一覧と月別集計':'自分の打刻・修正と月別集計';
+    $('attendanceTitle').textContent=isAdmin?'管理者用・打刻一覧と月別集計':'自分の打刻・修正申請と月別集計';
     $('reportAdminHelp').hidden=!isAdmin;
     $('reportSelfHelp').hidden=isAdmin;
+    $('correctionSave').textContent=isAdmin?'理由と時刻を保存':'修正を申請';
     version++; editing=null;staffOptions=[];$('correctionForm').hidden=true;$('correctionHistory').replaceChildren(); allowed=enabled; rows=[];loadedMonth='';busy=false;
     $('adminAttendance').hidden=!enabled;
-    $('reportRows').replaceChildren();$('reportSummary').replaceChildren();
+    $('reportRows').replaceChildren();$('reportSummary').replaceChildren();$('requestRows').replaceChildren();$('requestStatus').textContent='';
+    if(enabled)loadApplications();
     $('reportStatus').textContent='月を選んで「一覧を表示」を押してください。';
     controls();
   }
   function controls(){
+    $('refreshRequests').disabled=!allowed||busy;
     $('addAttendance').disabled=!allowed||busy||!loadedMonth;
     $('correctionSave').disabled=busy;$('correctionCancel').disabled=busy;
     $('loadReport').disabled=!allowed||busy;$('reportMonth').disabled=busy;
@@ -85,7 +88,7 @@ export function setupAttendance({db,auth,getConfig,download}) {
         return records.docs.map(d=>{
           const record=d.data(),review=reviewMap.get(d.id),result=calculate(record,review);
           const logs=corrections.docs.map(c=>c.data()).filter(c=>c.day===record.day);
-          const tags=[logs.some(c=>c.updatedBy===uid)?'本人修正あり':'',logs.some(c=>c.updatedBy!==uid)?'管理者修正あり':''].filter(Boolean);
+          const tags=[logs.some(c=>c.updatedBy===uid||c.requestId)?'本人修正あり':'',logs.some(c=>c.updatedBy!==uid&&!c.requestId)?'管理者修正あり':''].filter(Boolean);
           return {...record,uid,name,email:profile?.email||'',review,...result,status:[result.status,...tags].join(' ／ ')};
         });
       }));
@@ -134,7 +137,7 @@ export function setupAttendance({db,auth,getConfig,download}) {
       const title=document.createElement('p');title.textContent=`${dayLabel(row.day)} ${row.name} の修正履歴`; $('correctionHistory').append(title);
       if(result.empty){title.textContent+='：修正なし';return;}
       for(const log of result.docs.map(d=>d.data()).sort((a,b)=>b.updatedAt.toMillis()-a.updatedAt.toMillis())){
-        const line=document.createElement('p');line.textContent=`${stamp(log.updatedAt)} ／ ${log.updatedBy===row.uid?'本人':'管理者'} ／ ${log.reason} ／ 変更前 ${stamp(log.before?.clockIn)} ～ ${stamp(log.before?.clockOut)} → 変更後 ${stamp(log.after.clockIn)} ～ ${stamp(log.after.clockOut)}`;$('correctionHistory').append(line);
+        const line=document.createElement('p');line.textContent=`${stamp(log.updatedAt)} ／ ${log.requestId?'本人申請・管理者承認':log.updatedBy===row.uid?'本人':'管理者'} ／ ${log.reason} ／ 変更前 ${stamp(log.before?.clockIn)} ～ ${stamp(log.before?.clockOut)} → 変更後 ${stamp(log.after.clockIn)} ～ ${stamp(log.after.clockOut)}`;$('correctionHistory').append(line);
       }
     }catch(e){if(current===version)$('correctionHistory').textContent=`履歴を取得できません：${e.code||e.message}`;}
   }
@@ -148,11 +151,49 @@ export function setupAttendance({db,auth,getConfig,download}) {
       const date=$('correctionDate').value,day=Date.parse(date+'T00:00:00Z')/86400000;
       if(!Number.isInteger(day)||date.slice(0,7)!==loadedMonth)throw Error('対象月内の出勤日を選んでください。');
       busy=true;controls();render();$('correctionMessage').textContent='保存中…';
-      await saveCorrection({db,uid:$('correctionStaff').value,adminUid:auth.currentUser.uid,day,clockIn,clockOut,reason:$('correctionReason').value,expected:editing.expected});
-      if(current===version){busy=false;await load();if(loadedMonth)$('reportStatus').textContent='打刻と修正履歴を保存しました。休憩・実働も確認してください。';}
+      await (isAdmin?saveCorrection:submitCorrection)({db,uid:$('correctionStaff').value,adminUid:auth.currentUser.uid,day,clockIn,clockOut,reason:$('correctionReason').value,expected:editing.expected});
+      if(current===version){busy=false;await load();if(loadedMonth)$('reportStatus').textContent=isAdmin?'打刻と修正履歴を保存しました。休憩・実働も確認してください。':'修正を申請しました。承認までは正式な時刻・集計は変わりません。';await loadApplications();}
     }catch(e){if(current===version)$('correctionMessage').textContent=`保存できませんでした：${e.code||e.message}`;}
     finally{if(current===version){busy=false;controls();render();}}
   };
+  async function loadApplications(){
+    if(!allowed)return;
+    const current=version,adminMode=isAdmin,uid=selfUid;
+    $('requestStatus').textContent='申請を読み込んでいます…';
+    try{
+      const q=query(collection(db,'correctionRequests'),adminMode?where('status','==','pending'):where('uid','==',uid));
+      const [requests,profiles]=await Promise.all([getDocsFromServer(q),adminMode?getDocsFromServer(collection(db,'staffProfiles')):Promise.resolve({docs:[]})]);
+      if(current!==version||!allowed)return;
+      const names=new Map(profiles.docs.map(d=>[d.id,d.data().name]));
+      $('requestRows').replaceChildren();
+      const applications=requests.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.createdAt.toMillis()-a.createdAt.toMillis());
+      $('requestStatus').textContent=adminMode?`承認待ち ${applications.length}件（全月）。承認した時点で正式な記録と集計に反映します。`:'自分の申請履歴です。承認までは正式な記録は変わりません。';
+      for(const application of applications){
+        const tr=document.createElement('tr');
+        [names.get(application.uid)|| (adminMode?application.uid:'自分'),dayLabel(application.day),stamp(application.createdAt),`${stamp(application.before?.clockIn)} ～ ${stamp(application.before?.clockOut)}`,`${stamp(application.proposed.clockIn)} ～ ${stamp(application.proposed.clockOut)}`,application.reason].forEach(value=>cell(tr,value));
+        const actions=cell(tr,'');
+        if(adminMode){
+          for(const [label,approve] of [['承認',true],['却下',false]]){
+            const button=document.createElement('button');button.textContent=label;button.disabled=busy;button.onclick=()=>decideApplication(application,approve);actions.append(button);
+          }
+        }else actions.textContent=({pending:'承認待ち',approved:'承認済み',rejected:'却下'})[application.status];
+        $('requestRows').append(tr);
+      }
+    }catch(e){if(current===version){$('requestRows').replaceChildren();$('requestStatus').textContent=`申請を取得できません：${e.code||e.message}`;}}
+  }
+  async function decideApplication(application,approve){
+    if(!allowed||!isAdmin||busy)return;
+    const current=version;busy=true;controls();render();
+    $('requestRows').querySelectorAll('button').forEach(b=>b.disabled=true);$('requestStatus').textContent='処理中…';
+    try{
+      if(approve)await saveCorrection({db,uid:application.uid,adminUid:auth.currentUser.uid,...application.proposed,reason:application.reason,expected:application.before,requestId:application.id});
+      else await rejectCorrection({db,id:application.id,adminUid:auth.currentUser.uid});
+      if(current!==version||!allowed)return;
+      busy=false;if(loadedMonth)await load();await loadApplications();
+    }catch(e){if(current===version)$('requestStatus').textContent=`処理できませんでした：${e.code||e.message} 記録が変わった申請は却下して、本人に再申請を依頼してください。`;}
+    finally{if(current===version&&allowed){busy=false;controls();render();$('requestRows').querySelectorAll('button').forEach(b=>b.disabled=false);}}
+  }
+  $('refreshRequests').onclick=loadApplications;
   $('reportMonth').onchange=()=>reset(isAdmin,selfUid);
   $('loadReport').onclick=load;
   $('reportCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_打刻明細_${loadedMonth}.csv`,csv([['出勤日（日本時間）','氏名','Googleメール','UID','出勤','退勤','出勤〜退勤（時:分）','休憩（分）','実働（時:分）','状態'],...rows.map(r=>[dayLabel(r.day),r.name,r.email,r.uid,stamp(r.clockIn),stamp(r.clockOut),duration(r.gross),r.review?.breakMinutes??'',duration(r.net),r.status])]),'text/csv;charset=utf-8');};

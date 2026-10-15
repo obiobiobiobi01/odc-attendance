@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {initializeTestEnvironment,assertFails} from '@firebase/rules-unit-testing';
+import {doc,setDoc,getDoc,getDocs,collection,updateDoc,deleteDoc,serverTimestamp} from 'firebase/firestore';
+const source=readFileSync(new URL('../public/attendance-correction.js',import.meta.url),'utf8').replace('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js',import.meta.resolve('firebase/firestore'));
+const {saveCorrection,submitCorrection,rejectCorrection,parseTime}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const env=await initializeTestEnvironment({projectId:'demo-approval',firestore:{host:'127.0.0.1',port:8080,rules:readFileSync(new URL('../firestore.rules',import.meta.url),'utf8')}});
+const claims=email=>({email,email_verified:true,firebase:{sign_in_provider:'google.com'}});
+const db=env.authenticatedContext('admin',claims('omotesandodc@gmail.com')).firestore(),staff=env.authenticatedContext('a',claims('a@example.com')).firestore(),other=env.authenticatedContext('b',claims('b@example.com')).firestore();
+const clockIn=parseTime('2020-01-02T09:00'),clockOut=parseTime('2020-01-02T18:00'),day=Math.floor((clockIn.toMillis()+32400000)/86400000);
+const args={uid:'a',day,clockIn,clockOut,reason:'押し忘れ',expected:null};
+const requests=async()=> (await getDocs(collection(db,'correctionRequests'))).docs;
+try{
+ await env.clearFirestore();await env.withSecurityRulesDisabled(c=>setDoc(doc(c.firestore(),'settings','clinic'),{emails:['a@example.com','b@example.com']}));
+ await submitCorrection({...args,db:staff});let all=await requests(),application=all[0];
+ assert.equal((await getDoc(doc(db,'attendance','a'))).exists(),false);
+ await assertFails(updateDoc(doc(staff,'correctionRequests',application.id),{status:'approved',reviewedBy:'a',reviewedAt:serverTimestamp()}));
+ await assertFails(getDoc(doc(other,'correctionRequests',application.id)));
+ await assertFails(updateDoc(application.ref,{status:'approved',reviewedBy:'admin',reviewedAt:serverTimestamp(),correctionId:'fake'}));
+ await saveCorrection({...args,db,adminUid:'admin',requestId:application.id});
+ assert.equal((await getDoc(application.ref)).data().status,'approved');
+ const target=doc(db,'attendance','a','days',String(day));let saved=(await getDoc(target)).data();
+ assert.equal(saved.clockOut.toMillis(),clockOut.toMillis());
+ await assert.rejects(saveCorrection({...args,db,adminUid:'admin',requestId:application.id}),/処理済み/);
+ await assertFails(deleteDoc(application.ref));
+ await submitCorrection({...args,db:staff,expected:saved,clockOut:parseTime('2020-01-02T17:00')});
+ application=(await requests()).find(d=>d.data().status==='pending');
+ await rejectCorrection({db,id:application.id,adminUid:'admin'});
+ assert.equal((await getDoc(application.ref)).data().status,'rejected');assert.deepEqual((await getDoc(target)).data(),saved);
+ await assertFails(updateDoc(application.ref,{status:'pending'}));
+ await submitCorrection({...args,db:staff,expected:saved});application=(await requests()).find(d=>d.data().status==='pending');
+ await saveCorrection({...args,db,adminUid:'admin',expected:saved,clockOut:parseTime('2020-01-02T19:00')});
+ await assert.rejects(saveCorrection({...args,db,adminUid:'admin',expected:saved,requestId:application.id}),/更新/);
+ assert.equal((await getDoc(application.ref)).data().status,'pending');
+ await assertFails(submitCorrection({...args,db:other}));
+ console.log('PASS approval: pending leaves records unchanged, self-approval denied, private applications, atomic approval, rejection unchanged, duplicate/stale approval rejected');
+}finally{await env.cleanup();}
