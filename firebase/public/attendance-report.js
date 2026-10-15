@@ -8,8 +8,8 @@ export function monthRange(month) {
 export const dayLabel=day=>new Date(day*86400000).toISOString().slice(0,10);
 export function duration(ms) {
   if(ms==null) return '—';
-  const seconds=Math.floor(ms/1000);
-  return `${Math.floor(seconds/3600)}:${String(Math.floor(seconds/60)%60).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
+  const minutes=Math.floor(ms/60000);
+  return `${Math.floor(minutes/60)}:${String(minutes%60).padStart(2,'0')}`;
 }
 export function calculate(record,review) {
   if(!record.clockIn?.toMillis || !record.clockOut?.toMillis) return {gross:null,net:null,status:'退勤未打刻'};

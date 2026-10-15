@@ -145,7 +145,7 @@ export function setupAttendance({db,auth,getConfig,download}) {
   };
   $('reportMonth').onchange=()=>reset(allowed);
   $('loadReport').onclick=load;
-  $('reportCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_打刻明細_${loadedMonth}.csv`,csv([['出勤日（日本時間）','氏名','Googleメール','UID','出勤','退勤','出勤〜退勤（時:分:秒）','休憩（分）','実働（時:分:秒）','状態'],...rows.map(r=>[dayLabel(r.day),r.name,r.email,r.uid,stamp(r.clockIn),stamp(r.clockOut),duration(r.gross),r.review?.breakMinutes??'',duration(r.net),r.status])]),'text/csv;charset=utf-8');};
-  $('summaryCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_月別集計_${loadedMonth}.csv`,csv([['対象月','氏名','Googleメール','UID','打刻日数','集計対象日数','未確認日数','出勤〜退勤合計（時:分:秒）','実働合計（時:分:秒）'],...grouped().map(g=>{const s=totals(g);return [loadedMonth,g[0].name,g[0].email,g[0].uid,s.days,s.confirmed,s.pending,duration(s.gross),s.confirmed?duration(s.net):''];})]),'text/csv;charset=utf-8');};
+  $('reportCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_打刻明細_${loadedMonth}.csv`,csv([['出勤日（日本時間）','氏名','Googleメール','UID','出勤','退勤','出勤〜退勤（時:分）','休憩（分）','実働（時:分）','状態'],...rows.map(r=>[dayLabel(r.day),r.name,r.email,r.uid,stamp(r.clockIn),stamp(r.clockOut),duration(r.gross),r.review?.breakMinutes??'',duration(r.net),r.status])]),'text/csv;charset=utf-8');};
+  $('summaryCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_月別集計_${loadedMonth}.csv`,csv([['対象月','氏名','Googleメール','UID','打刻日数','集計対象日数','未確認日数','出勤〜退勤合計（時:分）','実働合計（時:分）'],...grouped().map(g=>{const s=totals(g);return [loadedMonth,g[0].name,g[0].email,g[0].uid,s.days,s.confirmed,s.pending,duration(s.gross),s.confirmed?duration(s.net):''];})]),'text/csv;charset=utf-8');};
   reset();return {reset};
 }

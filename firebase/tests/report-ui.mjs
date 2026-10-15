@@ -24,19 +24,19 @@ try{
   await setDoc(doc(db,'attendance','a'),data);await setDoc(doc(db,'attendance','a','days','20741'),data);
  });
  report.reset(true);$('reportMonth').value='2026-10';await $('loadReport').onclick();
- assert.match($('reportRows').textContent,/4:11:25/);assert.match($('reportRows').textContent,/自動（60分）/);
+ assert.match($('reportRows').textContent,/4:11/);assert.match($('reportRows').textContent,/自動（60分）/);
  assert.equal($('reportRows').rows.length,1);assert.equal($('reportSummary').rows.length,1);
  assert.equal((await getDoc(doc(db,'attendance','a','reviews','20741'))).data().source,'automatic');
  $('reportRows').querySelector('input').value='0';await $('reportRows').querySelector('button').onclick();
  assert.equal((await getDoc(doc(db,'attendance','a','reviews','20741'))).data().breakMinutes,0);
- assert.match($('reportSummary').textContent,/4:11:25/);
+ assert.match($('reportSummary').textContent,/4:11/);
  await $('loadReport').onclick();
  assert.equal($('reportRows').querySelector('input').value,'0');
  assert.match($('reportRows').textContent,/確認済み/);
- $('reportCsv').onclick();$('summaryCsv').onclick();assert.equal(downloads.length,2);assert.match(downloads[1][1],/4:11:25/);
+ $('reportCsv').onclick();$('summaryCsv').onclick();assert.equal(downloads.length,2);assert.match(downloads[1][1],/4:11/);
  const editButton=[...$('reportRows').querySelectorAll('button')].find(b=>b.textContent==='時刻修正');editButton.onclick();
  assert.equal($('correctionForm').hidden,false);$('correctionOut').value='2026-10-15T16:00';$('correctionReason').value='時刻確認';await $('correctionSave').onclick();
- assert.equal($('correctionForm').hidden,true);assert.match($('reportRows').textContent,/3:38:00/);
+ assert.equal($('correctionForm').hidden,true);assert.match($('reportRows').textContent,/3:38/);
  const historyButton=[...$('reportRows').querySelectorAll('button')].find(b=>b.textContent==='修正履歴');await historyButton.onclick();assert.match($('correctionHistory').textContent,/時刻確認/);
  $('addAttendance').onclick();assert.equal($('correctionStaff').options.length,1);$('correctionCancel').onclick();
  await env.withSecurityRulesDisabled(async c=>{
