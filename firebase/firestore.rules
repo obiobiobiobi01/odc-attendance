@@ -24,6 +24,16 @@ service cloud.firestore {
       return verified() && request.auth.uid == uid
         && request.auth.token.email in get(/databases/$(database)/documents/settings/clinic).data.emails;
     }
+    match /staffProfiles/{uid} {
+      allow read: if admin() || staffSelf(uid);
+      allow create, update: if staffSelf(uid)
+        && request.resource.data.keys().hasOnly(['email','name','slot'])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.slot is int
+        && request.resource.data.slot >= 0 && request.resource.data.slot < 6
+        && get(/databases/$(database)/documents/settings/clinic).data.emails[request.resource.data.slot] == request.auth.token.email
+        && get(/databases/$(database)/documents/settings/clinic).data.staff[request.resource.data.slot] == request.resource.data.name;
+    }
     function validStart(data) {
       return data.keys().hasOnly(['day','clockIn','clockOut'])
         && data.day is int
@@ -44,6 +54,21 @@ service cloud.firestore {
         && (validEnd() || (resource.data.clockOut != null
           && request.resource.data.day > resource.data.day && validStart(request.resource.data)))
         && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data;
+      match /reviews/{day} {
+        allow read: if admin() || staffSelf(uid);
+        allow create, update: if admin()
+          && request.resource.data.keys().hasOnly(['day','breakMinutes','updatedAt','updatedBy'])
+          && request.resource.data.day is int
+          && day == string(request.resource.data.day)
+          && request.resource.data.breakMinutes is int
+          && request.resource.data.breakMinutes >= 0
+          && request.resource.data.updatedBy == request.auth.uid
+          && request.resource.data.updatedAt == request.time
+          && get(/databases/$(database)/documents/attendance/$(uid)/days/$(day)).data.clockOut is timestamp
+          && request.resource.data.breakMinutes * 60000 <=
+            get(/databases/$(database)/documents/attendance/$(uid)/days/$(day)).data.clockOut.toMillis()
+            - get(/databases/$(database)/documents/attendance/$(uid)/days/$(day)).data.clockIn.toMillis();
+      }
       match /days/{day} {
         allow read: if admin() || staffSelf(uid);
         allow create: if staffSelf(uid) && validStart(request.resource.data)

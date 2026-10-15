@@ -1,6 +1,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFirestore, doc, collection, onSnapshot, getDoc, setDoc, serverTimestamp, runTransaction } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+import { setupAttendance } from './admin-attendance.js';
 import { firebaseConfig } from './firebase-config.js';
 
 const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
@@ -13,8 +14,10 @@ let y = new Date().getFullYear(), m = new Date().getMonth(), selected = '';
 const pad = n => String(n).padStart(2,'0'), dateKey = d => `${y}-${pad(m+1)}-${pad(d)}`;
 const message = s => { $('status').textContent = s; };
 let punchState = null, punchReady = false, punchBusy = false;
+const attendanceReport=setupAttendance({db,auth,getConfig:()=>config,download});
 const workDay = () => Math.floor((Date.now() + 9*3600000)/86400000);
 function clearData() {
+  attendanceReport.reset();
   punchState = null; punchReady = false; renderPunch();
   $('punchHistory').replaceChildren();
   unsubscribers.forEach(f => f()); unsubscribers = []; ready = false;
@@ -45,6 +48,13 @@ onAuthStateChanged(auth, async user => {
     if (current !== generation) return;
     if (!first.exists() && admin) await setDoc(ref, base);
     if (current !== generation) return;
+    const initialConfig=first.exists()?first.data():base;
+    const staffSlot=initialConfig.emails.indexOf(user.email);
+    if(staffSlot>=0) {
+      await setDoc(doc(db,'staffProfiles',user.uid),{email:user.email,name:initialConfig.staff[staffSlot],slot:staffSlot});
+      if(current!==generation)return;
+    }
+    attendanceReport.reset(admin);
     unsubscribers.push(onSnapshot(ref, snap => {
       if (current !== generation) return;
       if (!snap.exists()) { failed({code:'permission-denied'}); return; }

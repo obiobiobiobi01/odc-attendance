@@ -1,0 +1,42 @@
+import {readFileSync} from 'node:fs';
+import {initializeTestEnvironment,assertSucceeds,assertFails} from '@firebase/rules-unit-testing';
+import {doc,setDoc,getDoc,getDocs,collection,query,where,Timestamp,serverTimestamp,deleteDoc} from 'firebase/firestore';
+const env=await initializeTestEnvironment({projectId:'demo-odc-report',firestore:{host:'127.0.0.1',port:8080,rules:readFileSync(new URL('../firestore.rules',import.meta.url),'utf8')}});
+const context=(uid,email)=>env.authenticatedContext(uid,{email,email_verified:true,firebase:{sign_in_provider:'google.com'}}).firestore();
+const a=context('a','a@example.com'), b=context('b','b@example.com'), admin=context('admin','omotesandodc@gmail.com'), outsider=context('x','x@example.com');
+const day=20741,profile=db=>doc(db,'staffProfiles','a'),review=db=>doc(db,'attendance','a','reviews',String(day));
+const data={day,breakMinutes:60,updatedAt:serverTimestamp(),updatedBy:'admin'};
+try{
+ await env.clearFirestore();
+ await env.withSecurityRulesDisabled(async c=>{
+  const db=c.firestore();
+  await setDoc(doc(db,'settings','clinic'),{staff:['A','B','','','',''],emails:['a@example.com','b@example.com','','','',''],patterns:{}});
+  const r={day,clockIn:Timestamp.fromMillis(1000000),clockOut:Timestamp.fromMillis(1000000+8*3600000)};
+  await setDoc(doc(db,'attendance','a'),r);await setDoc(doc(db,'attendance','a','days',String(day)),r);
+  await setDoc(doc(db,'attendance','a','days',String(day+1)),{...r,day:day+1,clockOut:null});
+ });
+ await assertSucceeds(setDoc(profile(a),{email:'a@example.com',name:'A',slot:0}));
+ await assertFails(setDoc(profile(b),{email:'b@example.com',name:'B',slot:1}));
+ await assertFails(setDoc(profile(a),{email:'a@example.com',name:'B',slot:1}));
+ await assertFails(setDoc(profile(a),{email:'a@example.com',name:'fake',slot:0}));
+ await assertSucceeds(getDocs(collection(admin,'staffProfiles')));
+ await assertFails(getDocs(collection(b,'staffProfiles')));
+ await assertSucceeds(getDocs(collection(admin,'attendance')));
+ await assertFails(getDocs(collection(a,'attendance')));
+ const q=db=>query(collection(db,'attendance','a','days'),where('day','>=',20727),where('day','<',20758));
+ await assertSucceeds(getDocs(q(admin)));await assertFails(getDocs(q(b)));
+ await assertSucceeds(setDoc(review(admin),data));
+ await assertSucceeds(getDocs(query(collection(admin,'attendance','a','reviews'),where('day','>=',20727),where('day','<',20758))));
+ await assertSucceeds(getDoc(review(a)));await assertFails(getDoc(review(b)));await assertFails(getDoc(review(outsider)));
+ await assertFails(setDoc(review(a),{...data,updatedBy:'a'}));
+ for(const breakMinutes of [-1,481,0.5,'60'])await assertFails(setDoc(review(admin),{...data,breakMinutes}));
+ await assertSucceeds(setDoc(review(admin),{...data,breakMinutes:0}));
+ await assertFails(setDoc(review(admin),{...data,day:day+1}));
+ await assertFails(setDoc(review(admin),{...data,updatedAt:Timestamp.fromMillis(0)}));
+ await assertFails(setDoc(review(admin),{...data,updatedBy:'a'}));
+ await assertFails(setDoc(review(admin),{...data,clockIn:Timestamp.fromMillis(0)}));
+ await assertFails(setDoc(doc(admin,'attendance','a','reviews',String(day+1)),{...data,day:day+1}));
+ await assertFails(setDoc(doc(admin,'attendance','a','reviews',String(day+2)),{...data,day:day+2}));
+ await assertFails(deleteDoc(review(admin)));
+ console.log('PASS report rules: admin queries, self identity, private records, rest validation and timestamp enforcement');
+}finally{await env.cleanup();}
