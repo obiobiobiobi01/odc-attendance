@@ -1,5 +1,5 @@
 import {doc,collection,runTransaction,serverTimestamp,Timestamp} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
-export const localTime=t=>t?.toMillis?new Date(t.toMillis()+32400000).toISOString().slice(0,23):'';
+export const localTime=t=>t?.toMillis?new Date(t.toMillis()+32400000).toISOString().slice(0,16):'';
 export function parseTime(value){
   if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?$/.test(value))throw Error('日時を入力してください。');
   const date=new Date(value+'+09:00');

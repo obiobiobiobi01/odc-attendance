@@ -36,7 +36,7 @@ try{
  $('reportCsv').onclick();$('summaryCsv').onclick();assert.equal(downloads.length,2);assert.match(downloads[1][1],/4:11:25/);
  const editButton=[...$('reportRows').querySelectorAll('button')].find(b=>b.textContent==='時刻修正');editButton.onclick();
  assert.equal($('correctionForm').hidden,false);$('correctionOut').value='2026-10-15T16:00';$('correctionReason').value='時刻確認';await $('correctionSave').onclick();
- assert.equal($('correctionForm').hidden,true);assert.match($('reportRows').textContent,/3:37:29/);
+ assert.equal($('correctionForm').hidden,true);assert.match($('reportRows').textContent,/3:38:00/);
  const historyButton=[...$('reportRows').querySelectorAll('button')].find(b=>b.textContent==='修正履歴');await historyButton.onclick();assert.match($('correctionHistory').textContent,/時刻確認/);
  $('addAttendance').onclick();assert.equal($('correctionStaff').options.length,1);$('correctionCancel').onclick();
  await env.withSecurityRulesDisabled(async c=>{
