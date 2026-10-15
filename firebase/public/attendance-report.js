@@ -17,7 +17,7 @@ export function calculate(record,review) {
   if(gross<0) return {gross:null,net:null,status:'時刻要確認'};
   const rest=review?.breakMinutes;
   if(!Number.isInteger(rest) || rest<0 || rest*60000>gross) return {gross,net:null,status:'休憩未確認'};
-  return {gross,net:gross-rest*60000,status:'確認済み'};
+  return {gross,net:gross-rest*60000,status:review.source==='automatic'?'自動（60分）':'確認済み'};
 }
 export function totals(rows) {
   return rows.reduce((s,r)=>{s.days++; if(r.net==null) s.pending++; else {s.confirmed++;s.net+=r.net;} if(r.gross!=null)s.gross+=r.gross;return s;},{days:0,confirmed:0,pending:0,gross:0,net:0});

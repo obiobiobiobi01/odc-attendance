@@ -57,9 +57,10 @@ service cloud.firestore {
       match /reviews/{day} {
         allow read: if admin() || staffSelf(uid);
         allow create, update: if admin()
-          && request.resource.data.keys().hasOnly(['day','breakMinutes','updatedAt','updatedBy'])
+          && request.resource.data.keys().hasOnly(['day','breakMinutes','source','updatedAt','updatedBy'])
           && request.resource.data.day is int
           && day == string(request.resource.data.day)
+          && (!('source' in request.resource.data) || request.resource.data.source in ['automatic','manual'])
           && request.resource.data.breakMinutes is int
           && request.resource.data.breakMinutes >= 0
           && request.resource.data.updatedBy == request.auth.uid

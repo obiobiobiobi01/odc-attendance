@@ -51,7 +51,21 @@ export function setupAttendance({db,auth,getConfig,download}) {
         const uid=person.id;
         const loadPart=part=>getDocsFromServer(query(collection(db,'attendance',uid,part),where('day','>=',range[0]),where('day','<',range[1])));
         const [records,reviews]=await Promise.all([loadPart('days'),loadPart('reviews')]);
-        const reviewMap=new Map(reviews.docs.map(d=>[d.id,d.data()]));
+        // Create defaults only where no saved review exists; a concurrent edit always wins.
+        const missing=records.docs.filter(d=>!reviews.docs.some(r=>r.id===d.id));
+        for(const d of missing){
+          if(current!==version||!allowed)return [];
+          const record=d.data(),gross=calculate(record,null).gross;
+          if(gross==null||gross<60*60000)continue;
+          const target=doc(db,'attendance',uid,'reviews',d.id);
+          await runTransaction(db,async tx=>{
+            const existing=await tx.get(target);
+            if(existing.exists()||current!==version||!allowed)return;
+            tx.set(target,{day:record.day,breakMinutes:60,source:'automatic',updatedAt:serverTimestamp(),updatedBy:auth.currentUser.uid});
+          });
+        }
+        const latest=missing.length?await loadPart('reviews'):reviews;
+        const reviewMap=new Map(latest.docs.map(d=>[d.id,d.data()]));
         const profile=names.get(uid),slot=profile?config.emails.indexOf(profile.email):-1;
         const name=slot>=0?config.staff[slot]:profile?`${profile.name}（登録外）`:`名前未連携（${uid}）`;
         return records.docs.map(d=>{const record=d.data(),review=reviewMap.get(d.id);return {...record,uid,name,email:profile?.email||'',review,...calculate(record,review)};});
@@ -74,7 +88,7 @@ export function setupAttendance({db,auth,getConfig,download}) {
       await runTransaction(db,async tx=>{
         const existing=await tx.get(target),old=existing.exists()?existing.data():null;
         if((old?.updatedAt?.toMillis()??null)!==(row.review?.updatedAt?.toMillis()??null))throw Error('別の画面で休憩が更新されました。一覧を再表示して確認してください。');
-        tx.set(target,{day:row.day,breakMinutes:minutes,updatedAt:serverTimestamp(),updatedBy:adminUid});
+        tx.set(target,{day:row.day,breakMinutes:minutes,source:'manual',updatedAt:serverTimestamp(),updatedBy:adminUid});
       });
       if(current===version){busy=false;await load();if(loadedMonth)$('reportStatus').textContent='休憩を保存し、集計を更新しました。';}
     }catch(e){if(current===version)$('reportStatus').textContent=`保存できませんでした：${e.code||e.message}`;}
@@ -82,7 +96,7 @@ export function setupAttendance({db,auth,getConfig,download}) {
   }
   $('reportMonth').onchange=()=>reset(allowed);
   $('loadReport').onclick=load;
-  $('reportCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_打刻明細_${loadedMonth}.csv`,csv([['出勤日（日本時間）','氏名','Googleメール','UID','出勤','退勤','出勤〜退勤（時:分:秒）','確認した休憩（分）','確認済み実働（時:分:秒）','状態'],...rows.map(r=>[dayLabel(r.day),r.name,r.email,r.uid,stamp(r.clockIn),stamp(r.clockOut),duration(r.gross),r.review?.breakMinutes??'',duration(r.net),r.status])]),'text/csv;charset=utf-8');};
-  $('summaryCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_月別集計_${loadedMonth}.csv`,csv([['対象月','氏名','Googleメール','UID','打刻日数','確認済み日数','未確認日数','出勤〜退勤合計（時:分:秒）','確認済み実働合計（時:分:秒）'],...grouped().map(g=>{const s=totals(g);return [loadedMonth,g[0].name,g[0].email,g[0].uid,s.days,s.confirmed,s.pending,duration(s.gross),s.confirmed?duration(s.net):''];})]),'text/csv;charset=utf-8');};
+  $('reportCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_打刻明細_${loadedMonth}.csv`,csv([['出勤日（日本時間）','氏名','Googleメール','UID','出勤','退勤','出勤〜退勤（時:分:秒）','休憩（分）','実働（時:分:秒）','状態'],...rows.map(r=>[dayLabel(r.day),r.name,r.email,r.uid,stamp(r.clockIn),stamp(r.clockOut),duration(r.gross),r.review?.breakMinutes??'',duration(r.net),r.status])]),'text/csv;charset=utf-8');};
+  $('summaryCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_月別集計_${loadedMonth}.csv`,csv([['対象月','氏名','Googleメール','UID','打刻日数','集計対象日数','未確認日数','出勤〜退勤合計（時:分:秒）','実働合計（時:分:秒）'],...grouped().map(g=>{const s=totals(g);return [loadedMonth,g[0].name,g[0].email,g[0].uid,s.days,s.confirmed,s.pending,duration(s.gross),s.confirmed?duration(s.net):''];})]),'text/csv;charset=utf-8');};
   reset();return {reset};
 }
