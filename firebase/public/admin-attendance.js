@@ -1,13 +1,17 @@
 import {localTime,parseTime,saveCorrection} from './attendance-correction.js';
-import {collection,doc,getDocsFromServer,query,where,runTransaction,serverTimestamp} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+import {collection,doc,getDocFromServer,getDocsFromServer,query,where,runTransaction,serverTimestamp} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import {monthRange,dayLabel,duration,calculate,totals,csv} from './attendance-report.js';
 export function setupAttendance({db,auth,getConfig,download}) {
   const $=id=>document.getElementById(id);
-  let allowed=false,version=0,rows=[],loadedMonth='',busy=false,editing=null,staffOptions=[];
+  let isAdmin=false,selfUid=null,allowed=false,version=0,rows=[],loadedMonth='',busy=false,editing=null,staffOptions=[];
   const now=new Date(Date.now()+32400000);
   $('reportMonth').value=now.toISOString().slice(0,7);
   const stamp=t=>t?.toDate ? t.toDate().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
-  function reset(enabled=false) {
+  function reset(adminMode=false,uid=null) {
+    isAdmin=adminMode;selfUid=uid;const enabled=adminMode||!!uid;
+    $('attendanceTitle').textContent=isAdmin?'管理者用・打刻一覧と月別集計':'自分の打刻・修正と月別集計';
+    $('reportAdminHelp').hidden=!isAdmin;
+    $('reportSelfHelp').hidden=isAdmin;
     version++; editing=null;staffOptions=[];$('correctionForm').hidden=true;$('correctionHistory').replaceChildren(); allowed=enabled; rows=[];loadedMonth='';busy=false;
     $('adminAttendance').hidden=!enabled;
     $('reportRows').replaceChildren();$('reportSummary').replaceChildren();
@@ -35,8 +39,8 @@ export function setupAttendance({db,auth,getConfig,download}) {
       [dayLabel(r.day),r.name,stamp(r.clockIn),stamp(r.clockOut),duration(r.gross)].forEach(v=>cell(tr,v));
       const td=cell(tr,''), input=document.createElement('input'); input.type='number';input.min='0';input.step='1';input.max=String(Math.floor((r.gross||0)/60000));input.value=r.review?.breakMinutes??'';
       input.placeholder='未確認';input.setAttribute('aria-label',`${dayLabel(r.day)} ${r.name} 休憩（分）`);
-      input.disabled=busy||r.gross==null;
-      const button=document.createElement('button');button.textContent='保存';button.disabled=input.disabled;
+      input.disabled=!isAdmin||busy||r.gross==null;
+      const button=document.createElement('button');button.textContent='保存';button.disabled=input.disabled;button.hidden=!isAdmin;
       button.onclick=()=>saveBreak(r,input.value);
       td.append(input,button);cell(tr,duration(r.net));cell(tr,r.status);
       const actions=cell(tr,''),edit=document.createElement('button'),history=document.createElement('button');
@@ -52,16 +56,17 @@ export function setupAttendance({db,auth,getConfig,download}) {
     const current=++version,month=$('reportMonth').value;
     busy=true;rows=[];loadedMonth='';render();controls();$('reportStatus').textContent='読み込んでいます…';
     try {
-      const [people,profiles]=await Promise.all([getDocsFromServer(collection(db,'attendance')),getDocsFromServer(collection(db,'staffProfiles'))]);
+      const one=async path=>{const snap=await getDocFromServer(doc(db,path,selfUid));return {docs:snap.exists()?[snap]:[]};};
+      const [people,profiles]=await Promise.all(isAdmin?[getDocsFromServer(collection(db,'attendance')),getDocsFromServer(collection(db,'staffProfiles'))]:[one('attendance'),one('staffProfiles')]);
       if(current!==version||!allowed)return;
       const names=new Map(profiles.docs.map(d=>[d.id,d.data()])),config=getConfig();
       staffOptions=profiles.docs.filter(d=>config.emails.includes(d.data().email)).map(d=>({uid:d.id,name:config.staff[config.emails.indexOf(d.data().email)]}));
       const groups=await Promise.all(people.docs.map(async person=>{
         const uid=person.id;
         const loadPart=part=>getDocsFromServer(query(collection(db,'attendance',uid,part),where('day','>=',range[0]),where('day','<',range[1])));
-        const [records,reviews]=await Promise.all([loadPart('days'),loadPart('reviews')]);
+        const [records,reviews,corrections]=await Promise.all([loadPart('days'),loadPart('reviews'),loadPart('corrections')]);
         // Create defaults only where no saved review exists; a concurrent edit always wins.
-        const missing=records.docs.filter(d=>!reviews.docs.some(r=>r.id===d.id));
+        const missing=isAdmin?records.docs.filter(d=>!reviews.docs.some(r=>r.id===d.id)):[];
         for(const d of missing){
           if(current!==version||!allowed)return [];
           const record=d.data(),gross=calculate(record,null).gross;
@@ -77,7 +82,12 @@ export function setupAttendance({db,auth,getConfig,download}) {
         const reviewMap=new Map(latest.docs.map(d=>[d.id,d.data()]));
         const profile=names.get(uid),slot=profile?config.emails.indexOf(profile.email):-1;
         const name=slot>=0?config.staff[slot]:profile?`${profile.name}（登録外）`:`名前未連携（${uid}）`;
-        return records.docs.map(d=>{const record=d.data(),review=reviewMap.get(d.id);return {...record,uid,name,email:profile?.email||'',review,...calculate(record,review)};});
+        return records.docs.map(d=>{
+          const record=d.data(),review=reviewMap.get(d.id),result=calculate(record,review);
+          const logs=corrections.docs.map(c=>c.data()).filter(c=>c.day===record.day);
+          const tags=[logs.some(c=>c.updatedBy===uid)?'本人修正あり':'',logs.some(c=>c.updatedBy!==uid)?'管理者修正あり':''].filter(Boolean);
+          return {...record,uid,name,email:profile?.email||'',review,...result,status:[result.status,...tags].join(' ／ ')};
+        });
       }));
       if(current!==version||!allowed)return;
       rows=groups.flat().sort((a,b)=>a.day-b.day||a.name.localeCompare(b.name,'ja'));loadedMonth=month;
@@ -87,7 +97,7 @@ export function setupAttendance({db,auth,getConfig,download}) {
     finally{if(current===version){busy=false;render();controls();}}
   }
   async function saveBreak(row,value){
-    if(!allowed||busy)return;
+    if(!allowed||!isAdmin||busy)return;
     const minutes=Number(value);
     if(value.trim()===''||!Number.isInteger(minutes)||minutes<0||minutes*60000>row.gross){$('reportStatus').textContent='実際に取った休憩を、出勤〜退勤の範囲内の整数（分）で入力してください。';return;}
     const current=version,adminUid=auth.currentUser?.uid;
@@ -124,7 +134,7 @@ export function setupAttendance({db,auth,getConfig,download}) {
       const title=document.createElement('p');title.textContent=`${dayLabel(row.day)} ${row.name} の修正履歴`; $('correctionHistory').append(title);
       if(result.empty){title.textContent+='：修正なし';return;}
       for(const log of result.docs.map(d=>d.data()).sort((a,b)=>b.updatedAt.toMillis()-a.updatedAt.toMillis())){
-        const line=document.createElement('p');line.textContent=`${stamp(log.updatedAt)} ／ ${log.reason} ／ 変更前 ${stamp(log.before?.clockIn)} ～ ${stamp(log.before?.clockOut)} → 変更後 ${stamp(log.after.clockIn)} ～ ${stamp(log.after.clockOut)}`;$('correctionHistory').append(line);
+        const line=document.createElement('p');line.textContent=`${stamp(log.updatedAt)} ／ ${log.updatedBy===row.uid?'本人':'管理者'} ／ ${log.reason} ／ 変更前 ${stamp(log.before?.clockIn)} ～ ${stamp(log.before?.clockOut)} → 変更後 ${stamp(log.after.clockIn)} ～ ${stamp(log.after.clockOut)}`;$('correctionHistory').append(line);
       }
     }catch(e){if(current===version)$('correctionHistory').textContent=`履歴を取得できません：${e.code||e.message}`;}
   }
@@ -143,7 +153,7 @@ export function setupAttendance({db,auth,getConfig,download}) {
     }catch(e){if(current===version)$('correctionMessage').textContent=`保存できませんでした：${e.code||e.message}`;}
     finally{if(current===version){busy=false;controls();render();}}
   };
-  $('reportMonth').onchange=()=>reset(allowed);
+  $('reportMonth').onchange=()=>reset(isAdmin,selfUid);
   $('loadReport').onclick=load;
   $('reportCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_打刻明細_${loadedMonth}.csv`,csv([['出勤日（日本時間）','氏名','Googleメール','UID','出勤','退勤','出勤〜退勤（時:分）','休憩（分）','実働（時:分）','状態'],...rows.map(r=>[dayLabel(r.day),r.name,r.email,r.uid,stamp(r.clockIn),stamp(r.clockOut),duration(r.gross),r.review?.breakMinutes??'',duration(r.net),r.status])]),'text/csv;charset=utf-8');};
   $('summaryCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_月別集計_${loadedMonth}.csv`,csv([['対象月','氏名','Googleメール','UID','打刻日数','集計対象日数','未確認日数','出勤〜退勤合計（時:分）','実働合計（時:分）'],...grouped().map(g=>{const s=totals(g);return [loadedMonth,g[0].name,g[0].email,g[0].uid,s.days,s.confirmed,s.pending,duration(s.gross),s.confirmed?duration(s.net):''];})]),'text/csv;charset=utf-8');};

@@ -49,7 +49,7 @@ service cloud.firestore {
     function validCorrection(uid) {
       let data = request.resource.data;
       let log = getAfter(/databases/$(database)/documents/attendance/$(uid)/corrections/$(data.correctionId)).data;
-      return admin()
+      return (admin() || staffSelf(uid))
         && data.keys().hasOnly(['day','clockIn','clockOut','correctionId'])
         && data.day is int && data.clockIn is timestamp
         && data.day == int((data.clockIn.toMillis() + 32400000) / 86400000)
@@ -74,7 +74,7 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data;
       match /corrections/{id} {
         allow read: if admin() || staffSelf(uid);
-        allow create: if admin()
+        allow create: if (admin() || staffSelf(uid))
           && request.resource.data.keys().hasOnly(['day','before','after','reason','updatedBy','updatedAt'])
           && request.resource.data.day is int
           && request.resource.data.updatedBy == request.auth.uid

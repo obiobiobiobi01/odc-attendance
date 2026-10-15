@@ -54,7 +54,7 @@ onAuthStateChanged(auth, async user => {
       await setDoc(doc(db,'staffProfiles',user.uid),{email:user.email,name:initialConfig.staff[staffSlot],slot:staffSlot});
       if(current!==generation)return;
     }
-    attendanceReport.reset(admin);
+    attendanceReport.reset(admin,staffSlot>=0?user.uid:null);
     unsubscribers.push(onSnapshot(ref, snap => {
       if (current !== generation) return;
       if (!snap.exists()) { failed({code:'permission-denied'}); return; }

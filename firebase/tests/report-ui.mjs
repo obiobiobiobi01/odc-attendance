@@ -52,5 +52,20 @@ try{
  assert.equal($('reportRows').rows.length,0);assert.match($('reportStatus').textContent,/ありません/);
  $('reportMonth').value='2026-10';$('reportMonth').onchange();const pending=$('loadReport').onclick();report.reset(false);await pending;
  assert.equal($('adminAttendance').hidden,true);assert.equal($('reportRows').rows.length,0);$('reportCsv').onclick();assert.equal(downloads.length,2);
+ const staffDb=env.authenticatedContext('a',{email:'a@example.com',email_verified:true,firebase:{sign_in_provider:'google.com'}}).firestore();
+ const own=setupAttendance({db:staffDb,auth:{currentUser:{uid:'a'}},getConfig:()=>config,download:()=>{}});
+ own.reset(false,'a');$('reportMonth').value='2026-10';await $('loadReport').onclick();
+ assert.equal($('reportRows').rows.length,3);assert.match($('attendanceTitle').textContent,/自分/);
+ assert.equal($('reportRows').querySelector('input').disabled,true);
+ [...$('reportRows').rows[0].querySelectorAll('button')].find(b=>b.textContent==='時刻修正').onclick();
+ $('correctionOut').value='2026-10-15T16:10';$('correctionReason').value='本人が退勤時刻を訂正';await $('correctionSave').onclick();
+ assert.match($('reportRows').textContent,/本人修正あり/);
+ $('reportMonth').onchange();await $('loadReport').onclick();assert.match($('attendanceTitle').textContent,/自分/);
+ own.reset();
+ const adminAgain=setupAttendance({db,auth:{currentUser:{uid:'admin'}},getConfig:()=>config,download:()=>{}});
+ adminAgain.reset(true);$('reportMonth').value='2026-10';await $('loadReport').onclick();
+ assert.match($('reportRows').textContent,/本人修正あり/);assert.match($('reportRows').textContent,/管理者修正あり/);
+ await [...$('reportRows').rows[0].querySelectorAll('button')].find(b=>b.textContent==='修正履歴').onclick();
+ assert.match($('correctionHistory').textContent,/本人が退勤時刻を訂正/);
  console.log('PASS UI: server load, rest save, calculated totals, two CSVs, empty month, stale request cleared on logout');
 }finally{await env.cleanup();dom.window.close();}

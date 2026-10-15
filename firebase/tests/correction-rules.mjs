@@ -16,7 +16,10 @@ try{
  assert.equal(saved.clockOut.toMillis(),clockOut.toMillis());assert.deepEqual((await getDoc(doc(db,'attendance','a'))).data(),saved);
  const logs=await getDocs(collection(db,'attendance','a','corrections'));assert.equal(logs.size,1);assert.equal(logs.docs[0].data().before,null);
  await assertFails(updateDoc(logs.docs[0].ref,{reason:'changed'}));await assertFails(deleteDoc(logs.docs[0].ref));
- await assertFails(saveCorrection({...args,db:staff,adminUid:'a',expected:saved}));
+ await saveCorrection({...args,db:staff,adminUid:'a',expected:saved});saved=(await getDoc(path)).data();
+ await assertFails(saveCorrection({...args,db:staff,uid:'b',adminUid:'a',expected:null}));
+ await assertFails(saveCorrection({...args,db:staff,adminUid:'admin',expected:saved}));
+ await assertFails(getDoc(doc(staff,'attendance','b','days',String(day))));
  await assertFails(setDoc(path,{day,clockIn,clockOut}));
  await assert.rejects(saveCorrection(args),/更新/);
  await saveCorrection({...args,clockOut:null,expected:saved});saved=(await getDoc(path)).data();assert.equal((await getDoc(doc(db,'attendance','a'))).data().clockOut,null);
@@ -27,5 +30,5 @@ try{
  await assert.rejects(saveCorrection({...args,expected:saved,clockOut:parseTime('2020-01-02T08:00')}),/前後/);
  await assert.rejects(saveCorrection({...args,expected:saved,reason:' '}),/理由/);
  await assert.rejects(saveCorrection({...args,day:day+1,clockIn:Timestamp.fromMillis(Date.now()+86400000)}));
- console.log('PASS corrections: atomic audit, immutable history, staff denial, stale edit, parent synchronization, old-day addition, invalid input');
+ console.log('PASS corrections: atomic audit, immutable history, self correction, other staff denial, author spoof denial, stale edit, parent synchronization, old-day addition, invalid input');
 }finally{await env.cleanup();}
