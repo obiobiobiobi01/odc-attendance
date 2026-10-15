@@ -6,7 +6,7 @@ export function setupAttendance({db,auth,getConfig,download}) {
   let allowed=false,version=0,rows=[],loadedMonth='',busy=false,editing=null,staffOptions=[];
   const now=new Date(Date.now()+32400000);
   $('reportMonth').value=now.toISOString().slice(0,7);
-  const stamp=t=>t?.toDate ? t.toDate().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '—';
+  const stamp=t=>t?.toDate ? t.toDate().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
   function reset(enabled=false) {
     version++; editing=null;staffOptions=[];$('correctionForm').hidden=true;$('correctionHistory').replaceChildren(); allowed=enabled; rows=[];loadedMonth='';busy=false;
     $('adminAttendance').hidden=!enabled;

@@ -165,7 +165,7 @@ $('export').onclick=()=>{
 $('backup').onclick=()=>{if(ready)download('ODC_共有シフト.json',JSON.stringify({config,shifts},null,2),'application/json');};
 
 function stamp(value) {
-  return value?.toDate ? value.toDate().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '確認中';
+  return value?.toDate ? value.toDate().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '確認中';
 }
 function renderPunch() {
   const registered = !!auth.currentUser && config.emails.includes(auth.currentUser.email);
