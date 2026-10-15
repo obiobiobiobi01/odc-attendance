@@ -46,6 +46,18 @@ service cloud.firestore {
         && request.resource.data.clockOut == request.time
         && request.time >= resource.data.clockIn;
     }
+    function validCorrection(uid) {
+      let data = request.resource.data;
+      let log = getAfter(/databases/$(database)/documents/attendance/$(uid)/corrections/$(data.correctionId)).data;
+      return admin()
+        && data.keys().hasOnly(['day','clockIn','clockOut','correctionId'])
+        && data.day is int && data.clockIn is timestamp
+        && data.day == int((data.clockIn.toMillis() + 32400000) / 86400000)
+        && data.clockIn <= request.time
+        && (data.clockOut == null || (data.clockOut is timestamp && data.clockOut >= data.clockIn && data.clockOut <= request.time))
+        && log.after == data && log.updatedAt == request.time
+        && !exists(/databases/$(database)/documents/attendance/$(uid)/corrections/$(data.correctionId));
+    }
     match /attendance/{uid} {
       allow read: if admin() || staffSelf(uid);
       allow create: if staffSelf(uid) && validStart(request.resource.data)
@@ -54,6 +66,28 @@ service cloud.firestore {
         && (validEnd() || (resource.data.clockOut != null
           && request.resource.data.day > resource.data.day && validStart(request.resource.data)))
         && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data;
+      allow create: if validCorrection(uid)
+        && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data;
+      allow update: if validCorrection(uid)
+        && request.resource.data.day >= resource.data.day
+        && (request.resource.data.day == resource.data.day || resource.data.clockOut != null)
+        && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data;
+      match /corrections/{id} {
+        allow read: if admin() || staffSelf(uid);
+        allow create: if admin()
+          && request.resource.data.keys().hasOnly(['day','before','after','reason','updatedBy','updatedAt'])
+          && request.resource.data.day is int
+          && request.resource.data.updatedBy == request.auth.uid
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.reason is string
+          && request.resource.data.reason.size() > 0 && request.resource.data.reason.size() <= 200
+          && request.resource.data.after.correctionId == id
+          && request.resource.data.after.day == request.resource.data.day
+          && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data.after
+          && (exists(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day)))
+            ? request.resource.data.before == get(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data
+            : request.resource.data.before == null);
+      }
       match /reviews/{day} {
         allow read: if admin() || staffSelf(uid);
         allow create, update: if admin()
@@ -71,6 +105,11 @@ service cloud.firestore {
             - get(/databases/$(database)/documents/attendance/$(uid)/days/$(day)).data.clockIn.toMillis();
       }
       match /days/{day} {
+        allow create, update: if validCorrection(uid)
+          && day == string(request.resource.data.day)
+          && (getAfter(/databases/$(database)/documents/attendance/$(uid)).data.day == request.resource.data.day
+            ? getAfter(/databases/$(database)/documents/attendance/$(uid)).data == request.resource.data
+            : getAfter(/databases/$(database)/documents/attendance/$(uid)).data.day > request.resource.data.day && request.resource.data.clockOut != null);
         allow read: if admin() || staffSelf(uid);
         allow create: if staffSelf(uid) && validStart(request.resource.data)
           && day == string(request.resource.data.day)

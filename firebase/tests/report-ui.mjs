@@ -7,7 +7,9 @@ const env=await initializeTestEnvironment({projectId:'demo-odc-ui',firestore:{ho
 const db=env.authenticatedContext('admin',{email:'omotesandodc@gmail.com',email_verified:true,firebase:{sign_in_provider:'google.com'}}).firestore();
 const dom=new JSDOM(readFileSync(new URL('../public/index.html',import.meta.url),'utf8'));
 globalThis.document=dom.window.document;
-const moduleSource=readFileSync(new URL('../public/admin-attendance.js',import.meta.url),'utf8').replace('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js',import.meta.resolve('firebase/firestore')).replace('./attendance-report.js',new URL('../public/attendance-report.js',import.meta.url).href);
+const correctionSource=readFileSync(new URL('../public/attendance-correction.js',import.meta.url),'utf8').replace('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js',import.meta.resolve('firebase/firestore'));
+const correctionUrl='data:text/javascript;base64,'+Buffer.from(correctionSource).toString('base64');
+const moduleSource=readFileSync(new URL('../public/admin-attendance.js',import.meta.url),'utf8').replace('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js',import.meta.resolve('firebase/firestore')).replace('./attendance-correction.js',correctionUrl).replace('./attendance-report.js',new URL('../public/attendance-report.js',import.meta.url).href);
 const {setupAttendance}=await import('data:text/javascript;base64,'+Buffer.from(moduleSource).toString('base64'));
 const $=id=>document.getElementById(id);
 const config={staff:['A','B','','','',''],emails:['a@example.com','b@example.com','','','',''],patterns:{}};
@@ -32,6 +34,11 @@ try{
  assert.equal($('reportRows').querySelector('input').value,'0');
  assert.match($('reportRows').textContent,/確認済み/);
  $('reportCsv').onclick();$('summaryCsv').onclick();assert.equal(downloads.length,2);assert.match(downloads[1][1],/4:11:25/);
+ const editButton=[...$('reportRows').querySelectorAll('button')].find(b=>b.textContent==='時刻修正');editButton.onclick();
+ assert.equal($('correctionForm').hidden,false);$('correctionOut').value='2026-10-15T16:00';$('correctionReason').value='時刻確認';await $('correctionSave').onclick();
+ assert.equal($('correctionForm').hidden,true);assert.match($('reportRows').textContent,/3:37:29/);
+ const historyButton=[...$('reportRows').querySelectorAll('button')].find(b=>b.textContent==='修正履歴');await historyButton.onclick();assert.match($('correctionHistory').textContent,/時刻確認/);
+ $('addAttendance').onclick();assert.equal($('correctionStaff').options.length,1);$('correctionCancel').onclick();
  await env.withSecurityRulesDisabled(async c=>{
   const db=c.firestore(),clockIn=Timestamp.fromDate(new Date('2026-10-16T09:00:00+09:00'));
   await setDoc(doc(db,'attendance','a','days','20742'),{day:20742,clockIn,clockOut:Timestamp.fromMillis(clockIn.toMillis()+30*60000)});

@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {initializeTestEnvironment,assertFails} from '@firebase/rules-unit-testing';
+import {doc,getDoc,setDoc,updateDoc,deleteDoc,getDocs,collection,Timestamp} from 'firebase/firestore';
+const source=readFileSync(new URL('../public/attendance-correction.js',import.meta.url),'utf8').replace('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js',import.meta.resolve('firebase/firestore'));
+const {saveCorrection,parseTime}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const env=await initializeTestEnvironment({projectId:'demo-correction',firestore:{host:'127.0.0.1',port:8080,rules:readFileSync(new URL('../firestore.rules',import.meta.url),'utf8')}});
+const claims=email=>({email,email_verified:true,firebase:{sign_in_provider:'google.com'}});
+const db=env.authenticatedContext('admin',claims('omotesandodc@gmail.com')).firestore(),staff=env.authenticatedContext('a',claims('a@example.com')).firestore();
+const clockIn=parseTime('2020-01-02T09:00'),clockOut=parseTime('2020-01-02T18:00'),day=Math.floor((clockIn.toMillis()+32400000)/86400000);
+const args={db,uid:'a',adminUid:'admin',day,clockIn,clockOut,reason:'退勤忘れ',expected:null};
+try{
+ await env.clearFirestore();await env.withSecurityRulesDisabled(c=>setDoc(doc(c.firestore(),'settings','clinic'),{emails:['a@example.com']}));
+ await saveCorrection(args);
+ const path=doc(db,'attendance','a','days',String(day));let saved=(await getDoc(path)).data();
+ assert.equal(saved.clockOut.toMillis(),clockOut.toMillis());assert.deepEqual((await getDoc(doc(db,'attendance','a'))).data(),saved);
+ const logs=await getDocs(collection(db,'attendance','a','corrections'));assert.equal(logs.size,1);assert.equal(logs.docs[0].data().before,null);
+ await assertFails(updateDoc(logs.docs[0].ref,{reason:'changed'}));await assertFails(deleteDoc(logs.docs[0].ref));
+ await assertFails(saveCorrection({...args,db:staff,adminUid:'a',expected:saved}));
+ await assertFails(setDoc(path,{day,clockIn,clockOut}));
+ await assert.rejects(saveCorrection(args),/更新/);
+ await saveCorrection({...args,clockOut:null,expected:saved});saved=(await getDoc(path)).data();assert.equal((await getDoc(doc(db,'attendance','a'))).data().clockOut,null);
+ await assert.rejects(saveCorrection({...args,day:day+1,clockIn:parseTime('2020-01-03T09:00'),clockOut:parseTime('2020-01-03T18:00')}),/前の勤務/);
+ await saveCorrection({...args,expected:saved});saved=(await getDoc(path)).data();
+ await saveCorrection({...args,day:day-1,clockIn:parseTime('2020-01-01T09:00'),clockOut:parseTime('2020-01-01T18:00')});
+ assert.equal((await getDoc(doc(db,'attendance','a'))).data().day,day);
+ await assert.rejects(saveCorrection({...args,expected:saved,clockOut:parseTime('2020-01-02T08:00')}),/前後/);
+ await assert.rejects(saveCorrection({...args,expected:saved,reason:' '}),/理由/);
+ await assert.rejects(saveCorrection({...args,day:day+1,clockIn:Timestamp.fromMillis(Date.now()+86400000)}));
+ console.log('PASS corrections: atomic audit, immutable history, staff denial, stale edit, parent synchronization, old-day addition, invalid input');
+}finally{await env.cleanup();}

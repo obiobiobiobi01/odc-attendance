@@ -1,19 +1,22 @@
+import {localTime,parseTime,saveCorrection} from './attendance-correction.js';
 import {collection,doc,getDocsFromServer,query,where,runTransaction,serverTimestamp} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import {monthRange,dayLabel,duration,calculate,totals,csv} from './attendance-report.js';
 export function setupAttendance({db,auth,getConfig,download}) {
   const $=id=>document.getElementById(id);
-  let allowed=false,version=0,rows=[],loadedMonth='',busy=false;
+  let allowed=false,version=0,rows=[],loadedMonth='',busy=false,editing=null,staffOptions=[];
   const now=new Date(Date.now()+32400000);
   $('reportMonth').value=now.toISOString().slice(0,7);
   const stamp=t=>t?.toDate ? t.toDate().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '—';
   function reset(enabled=false) {
-    version++; allowed=enabled; rows=[];loadedMonth='';busy=false;
+    version++; editing=null;staffOptions=[];$('correctionForm').hidden=true;$('correctionHistory').replaceChildren(); allowed=enabled; rows=[];loadedMonth='';busy=false;
     $('adminAttendance').hidden=!enabled;
     $('reportRows').replaceChildren();$('reportSummary').replaceChildren();
     $('reportStatus').textContent='月を選んで「一覧を表示」を押してください。';
     controls();
   }
   function controls(){
+    $('addAttendance').disabled=!allowed||busy||!loadedMonth;
+    $('correctionSave').disabled=busy;$('correctionCancel').disabled=busy;
     $('loadReport').disabled=!allowed||busy;$('reportMonth').disabled=busy;
     $('reportCsv').disabled=!allowed||busy||!loadedMonth;
     $('summaryCsv').disabled=!allowed||busy||!loadedMonth;
@@ -35,18 +38,24 @@ export function setupAttendance({db,auth,getConfig,download}) {
       input.disabled=busy||r.gross==null;
       const button=document.createElement('button');button.textContent='保存';button.disabled=input.disabled;
       button.onclick=()=>saveBreak(r,input.value);
-      td.append(input,button);cell(tr,duration(r.net));cell(tr,r.status);$('reportRows').append(tr);
+      td.append(input,button);cell(tr,duration(r.net));cell(tr,r.status);
+      const actions=cell(tr,''),edit=document.createElement('button'),history=document.createElement('button');
+      edit.textContent='時刻修正';edit.disabled=busy;edit.onclick=()=>openCorrection(r);
+      history.textContent='修正履歴';history.disabled=busy;history.onclick=()=>showHistory(r);
+      actions.append(edit,history);$('reportRows').append(tr);
     }
   }
   async function load(){
     if(!allowed||busy)return;
     let range;try{range=monthRange($('reportMonth').value);}catch(e){$('reportStatus').textContent=e.message;return;}
+    editing=null;$('correctionForm').hidden=true;$('correctionHistory').replaceChildren();
     const current=++version,month=$('reportMonth').value;
     busy=true;rows=[];loadedMonth='';render();controls();$('reportStatus').textContent='読み込んでいます…';
     try {
       const [people,profiles]=await Promise.all([getDocsFromServer(collection(db,'attendance')),getDocsFromServer(collection(db,'staffProfiles'))]);
       if(current!==version||!allowed)return;
       const names=new Map(profiles.docs.map(d=>[d.id,d.data()])),config=getConfig();
+      staffOptions=profiles.docs.filter(d=>config.emails.includes(d.data().email)).map(d=>({uid:d.id,name:config.staff[config.emails.indexOf(d.data().email)]}));
       const groups=await Promise.all(people.docs.map(async person=>{
         const uid=person.id;
         const loadPart=part=>getDocsFromServer(query(collection(db,'attendance',uid,part),where('day','>=',range[0]),where('day','<',range[1])));
@@ -94,6 +103,46 @@ export function setupAttendance({db,auth,getConfig,download}) {
     }catch(e){if(current===version)$('reportStatus').textContent=`保存できませんでした：${e.code||e.message}`;}
     finally{if(current===version){busy=false;render();controls();}}
   }
+  function openCorrection(row=null){
+    if(!allowed||busy)return;
+    if(!row&&!staffOptions.length){$('reportStatus').textContent='先にスタッフ本人がログインしてください。';return;}
+    editing=row?{...row,expected:{day:row.day,clockIn:row.clockIn,clockOut:row.clockOut,...(row.correctionId?{correctionId:row.correctionId}:{})}}:{expected:null};
+    const select=$('correctionStaff');select.replaceChildren();
+    for(const person of row?[row]:staffOptions){const option=document.createElement('option');option.value=person.uid;option.textContent=person.name;select.append(option);}
+    select.disabled=!!row;
+    $('correctionDate').value=row?dayLabel(row.day):loadedMonth+'-01';$('correctionDate').disabled=!!row;
+    $('correctionIn').value=row?localTime(row.clockIn):'';$('correctionOut').value=row?localTime(row.clockOut):'';
+    $('correctionReason').value='';$('correctionMessage').textContent='';$('correctionForm').hidden=false;$('correctionForm').scrollIntoView?.({behavior:'smooth',block:'center'});
+  }
+  async function showHistory(row){
+    if(!allowed||busy)return;
+    const current=version;$('correctionHistory').textContent='履歴を読み込んでいます…';
+    try{
+      const result=await getDocsFromServer(query(collection(db,'attendance',row.uid,'corrections'),where('day','==',row.day)));
+      if(current!==version||!allowed)return;
+      $('correctionHistory').replaceChildren();
+      const title=document.createElement('p');title.textContent=`${dayLabel(row.day)} ${row.name} の修正履歴`; $('correctionHistory').append(title);
+      if(result.empty){title.textContent+='：修正なし';return;}
+      for(const log of result.docs.map(d=>d.data()).sort((a,b)=>b.updatedAt.toMillis()-a.updatedAt.toMillis())){
+        const line=document.createElement('p');line.textContent=`${stamp(log.updatedAt)} ／ ${log.reason} ／ 変更前 ${stamp(log.before?.clockIn)} ～ ${stamp(log.before?.clockOut)} → 変更後 ${stamp(log.after.clockIn)} ～ ${stamp(log.after.clockOut)}`;$('correctionHistory').append(line);
+      }
+    }catch(e){if(current===version)$('correctionHistory').textContent=`履歴を取得できません：${e.code||e.message}`;}
+  }
+  $('addAttendance').onclick=()=>openCorrection();
+  $('correctionCancel').onclick=()=>{if(!busy){editing=null;$('correctionForm').hidden=true;}};
+  $('correctionSave').onclick=async()=>{
+    if(!allowed||busy||!editing)return;
+    const current=version;
+    try{
+      const clockIn=parseTime($('correctionIn').value),clockOut=$('correctionOut').value?parseTime($('correctionOut').value):null;
+      const date=$('correctionDate').value,day=Date.parse(date+'T00:00:00Z')/86400000;
+      if(!Number.isInteger(day)||date.slice(0,7)!==loadedMonth)throw Error('対象月内の出勤日を選んでください。');
+      busy=true;controls();render();$('correctionMessage').textContent='保存中…';
+      await saveCorrection({db,uid:$('correctionStaff').value,adminUid:auth.currentUser.uid,day,clockIn,clockOut,reason:$('correctionReason').value,expected:editing.expected});
+      if(current===version){busy=false;await load();if(loadedMonth)$('reportStatus').textContent='打刻と修正履歴を保存しました。休憩・実働も確認してください。';}
+    }catch(e){if(current===version)$('correctionMessage').textContent=`保存できませんでした：${e.code||e.message}`;}
+    finally{if(current===version){busy=false;controls();render();}}
+  };
   $('reportMonth').onchange=()=>reset(allowed);
   $('loadReport').onclick=load;
   $('reportCsv').onclick=()=>{if(!allowed||busy||!loadedMonth)return;download(`ODC_打刻明細_${loadedMonth}.csv`,csv([['出勤日（日本時間）','氏名','Googleメール','UID','出勤','退勤','出勤〜退勤（時:分:秒）','休憩（分）','実働（時:分:秒）','状態'],...rows.map(r=>[dayLabel(r.day),r.name,r.email,r.uid,stamp(r.clockIn),stamp(r.clockOut),duration(r.gross),r.review?.breakMinutes??'',duration(r.net),r.status])]),'text/csv;charset=utf-8');};
