@@ -1,11 +1,23 @@
-import {doc,collection,runTransaction,serverTimestamp} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+import {doc,collection,runTransaction,serverTimestamp,getDocsFromServer,query,where} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 export const leaveLabels={full:'1日',am:'半日（午前）',pm:'半日（午後）'};
 export function validLeaveDate(date){return /^\d{4}-\d{2}-\d{2}$/.test(date)&&Number.isFinite(Date.parse(date))&&new Date(date+'T00:00:00Z').toISOString().slice(0,10)===date;}
 export async function requestLeave({db,uid,date,part,note=''}){
   if(!validLeaveDate(date)||part!=='full')throw Error('日付と取得区分を選んでください。');
   if(note.length>200)throw Error('備考は200文字以内で入力してください。');
-  const ref=doc(collection(db,'leaveRequests'));
-  await runTransaction(db,async tx=>{tx.set(ref,{uid,date,part,note:note.trim(),status:'pending',createdAt:serverTimestamp(),createdBy:uid});});
+  const duplicate='同じ日の有給が申請済みです（承認待ち・承認済み）。';
+  // Include older requests created before date locks were introduced.
+  const existing=await getDocsFromServer(query(collection(db,'leaveRequests'),where('uid','==',uid)));
+  if(existing.docs.some(d=>d.data().date===date&&['pending','approved'].includes(d.data().status)))throw Error(duplicate);
+  const ref=doc(collection(db,'leaveRequests')),lockRef=doc(db,'leaveRequestLocks',uid,'days',date);
+  await runTransaction(db,async tx=>{
+    const lock=await tx.get(lockRef);
+    if(lock.exists()){
+      const previous=await tx.get(doc(db,'leaveRequests',lock.data().requestId));
+      if(!previous.exists()||!['rejected','cancelled'].includes(previous.data().status))throw Error(duplicate);
+    }
+    tx.set(ref,{uid,date,part,note:note.trim(),status:'pending',createdAt:serverTimestamp(),createdBy:uid});
+    tx.set(lockRef,{requestId:ref.id});
+  });
 }
 export async function setLeaveBalance({db,uid,adminUid,days,expected}){
   if(!Number.isFinite(days)||days<0||!Number.isInteger(days))throw Error('残日数は0以上、1日単位で入力してください。');

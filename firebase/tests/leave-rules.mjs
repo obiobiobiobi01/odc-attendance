@@ -15,6 +15,8 @@ try{
  await assert.rejects(requestLeave({db:staff,uid:'a',date:'2026-11-01',part:'am'}),/取得区分/);
  await assertFails(setDoc(doc(staff,'leaveRequests','half-test'),{uid:'a',date:'2026-11-01',part:'am',note:'',status:'pending',createdBy:'a',createdAt:serverTimestamp()}));
  await requestLeave({db:staff,uid:'a',date:'2026-11-01',part:'full'});let application=(await requests())[0];
+ await assert.rejects(requestLeave({db:staff,uid:'a',date:'2026-11-01',part:'full'}),/申請済み/);
+ await assertFails(setDoc(doc(staff,'leaveRequests','no-lock'),{uid:'a',date:'2026-12-01',part:'full',note:'',status:'pending',createdBy:'a',createdAt:serverTimestamp()}));
  assert.equal((await getDoc(balanceRef)).exists(),false);
  await assert.rejects(decideLeave({db,id:application.id,action:'approve',adminUid:'admin'}),/先に/);
  await assertFails(setLeaveBalance({db:staff,uid:'a',adminUid:'a',days:10,expected:null,reason:'test'}));
@@ -26,9 +28,7 @@ try{
  assert.equal((await getDoc(balanceRef)).data().units,4);
  let calendar=(await getDoc(doc(db,'leaveDays','a_2026-11-01'))).data();assert.equal(calendar.am,application.id);assert.equal(calendar.pm,application.id);
  await assert.rejects(decideLeave({db,id:application.id,action:'approve',adminUid:'admin'}),/処理済み/);
- await requestLeave({db:staff,uid:'a',date:'2026-11-01',part:'full'});const duplicate=(await requests()).find(d=>d.data().status==='pending');
- await assert.rejects(decideLeave({db,id:duplicate.id,action:'approve',adminUid:'admin'}),/承認済み/);
- await decideLeave({db,id:duplicate.id,action:'reject',adminUid:'admin'});assert.equal((await getDoc(balanceRef)).data().units,4);
+ await assert.rejects(requestLeave({db:staff,uid:'a',date:'2026-11-01',part:'full'}),/申請済み/);
  await decideLeave({db,id:application.id,action:'cancel',adminUid:'admin'});assert.equal((await getDoc(balanceRef)).data().units,6);
  assert.equal((await getDoc(doc(db,'leaveDays','a_2026-11-01'))).data().am,'');
  await requestLeave({db:staff,uid:'a',date:'2026-11-02',part:'full'});application=(await requests()).find(d=>d.data().status==='pending');
@@ -45,6 +45,17 @@ try{
  const outcomes=await Promise.allSettled(concurrent.map(d=>decideLeave({db,id:d.id,action:'approve',adminUid:'admin'})));
  assert.equal(outcomes.filter(o=>o.status==='fulfilled').length,1);assert.equal((await getDoc(balanceRef)).data().units,0);
  await assertFails(setDoc(doc(staff,'leaveDays','a_2026-11-06'),{uid:'a',date:'2026-11-06',slot:0,am:'fake',pm:''}));
+ const races=await Promise.allSettled([1,2].map(()=>requestLeave({db:staff,uid:'a',date:'2026-12-01',part:'full'})));
+ assert.equal(races.filter(r=>r.status==='fulfilled').length,1);
+ assert.equal((await requests()).filter(d=>d.data().date==='2026-12-01').length,1);
+ await requestLeave({db:other,uid:'b',date:'2026-12-01',part:'full'});
+ // Reapply after cancellation and rejection, retaining all previous requests.
+ await requestLeave({db:staff,uid:'a',date:'2026-11-01',part:'full'});
+ const again=(await requests()).find(d=>d.data().date==='2026-11-01'&&d.data().status==='pending');
+ await decideLeave({db,id:again.id,action:'reject',adminUid:'admin'});
+ await requestLeave({db:staff,uid:'a',date:'2026-11-01',part:'full'});
+ await env.withSecurityRulesDisabled(c=>setDoc(doc(c.firestore(),'leaveRequests','legacy'),{uid:'a',date:'2026-12-02',part:'full',status:'pending',note:'',createdBy:'a',createdAt:serverTimestamp()}));
+ await assert.rejects(requestLeave({db:staff,uid:'a',date:'2026-12-02',part:'full'}),/申請済み/);
  console.log('PASS leave: unset balance applications, admin-only balance, privacy, atomic approval/calendar/deduction, full-day only, reject, cancellation/refund, duplicates, stale balance, insufficient balance');
  // Real UI using the same emulator and service.
  const {JSDOM}=await import('jsdom');const dom=new JSDOM(readFileSync(new URL('../public/index.html',import.meta.url),'utf8'));globalThis.document=dom.window.document;

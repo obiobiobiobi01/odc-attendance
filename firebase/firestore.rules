@@ -188,6 +188,20 @@ service cloud.firestore {
         && (data.part == 'pm' || calendar.am == expected)
         && (data.part == 'am' || calendar.pm == expected);
     }
+    match /leaveRequestLocks/{uid}/days/{date} {
+      function validLock() {
+        let id = request.resource.data.requestId;
+        let linked = getAfter(/databases/$(database)/documents/leaveRequests/$(id)).data;
+        return request.resource.data.keys().hasOnly(['requestId'])
+          && id is string
+          && !exists(/databases/$(database)/documents/leaveRequests/$(id))
+          && linked.uid == uid && linked.date == date && linked.status == 'pending';
+      }
+      allow read: if admin() || staffSelf(uid);
+      allow create: if staffSelf(uid) && validLock();
+      allow update: if staffSelf(uid) && validLock()
+        && get(/databases/$(database)/documents/leaveRequests/$(resource.data.requestId)).data.status in ['rejected','cancelled'];
+    }
     match /leaveRequests/{id} {
       allow read: if admin() || staffSelf(resource.data.uid);
       allow create: if staffSelf(request.resource.data.uid)
@@ -196,6 +210,7 @@ service cloud.firestore {
         && request.resource.data.part == 'full'
         && request.resource.data.note is string && request.resource.data.note.size() <= 200
         && request.resource.data.status == 'pending'
+        && getAfter(/databases/$(database)/documents/leaveRequestLocks/$(request.resource.data.uid)/days/$(request.resource.data.date)).data.requestId == id
         && request.resource.data.createdBy == request.auth.uid && request.resource.data.createdAt == request.time;
       allow update: if admin() && (
         (resource.data.status == 'pending'
