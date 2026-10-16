@@ -154,6 +154,59 @@ service cloud.firestore {
           && getAfter(/databases/$(database)/documents/attendance/$(uid)).data == request.resource.data;
       }
     }
+    match /leaveBalances/{uid} {
+      allow read: if admin() || staffSelf(uid);
+      allow create, update: if admin()
+        && request.resource.data.keys().hasOnly(['units','updatedBy','updatedAt'])
+        && request.resource.data.units is int && request.resource.data.units >= 0
+        && request.resource.data.updatedBy == request.auth.uid && request.resource.data.updatedAt == request.time;
+      match /history/{id} {
+        allow read: if admin() || staffSelf(uid);
+        allow create: if admin()
+          && request.resource.data.keys().hasOnly(['before','after','reason','updatedBy','updatedAt'])
+          && (request.resource.data.before == null || request.resource.data.before is int)
+          && request.resource.data.after is int && request.resource.data.after >= 0
+          && request.resource.data.reason is string && request.resource.data.reason.size() > 0 && request.resource.data.reason.size() <= 200
+          && request.resource.data.updatedBy == request.auth.uid && request.resource.data.updatedAt == request.time;
+      }
+    }
+    match /leaveDays/{id} {
+      allow read: if member();
+      allow create, update: if admin()
+        && request.resource.data.keys().hasOnly(['uid','date','slot','am','pm'])
+        && id == request.resource.data.uid + '_' + request.resource.data.date
+        && request.resource.data.slot is int && request.resource.data.slot >= 0 && request.resource.data.slot < 6
+        && request.resource.data.am is string && request.resource.data.pm is string;
+    }
+    function leaveApplied(id, data, cancelling) {
+      let units = data.part == 'full' ? 2 : 1;
+      let before = get(/databases/$(database)/documents/leaveBalances/$(data.uid)).data.units;
+      let after = getAfter(/databases/$(database)/documents/leaveBalances/$(data.uid)).data.units;
+      let calendar = getAfter(/databases/$(database)/documents/leaveDays/$(data.uid + '_' + data.date)).data;
+      let expected = cancelling ? '' : id;
+      return after == before + (cancelling ? units : -units)
+        && (data.part == 'pm' || calendar.am == expected)
+        && (data.part == 'am' || calendar.pm == expected);
+    }
+    match /leaveRequests/{id} {
+      allow read: if admin() || staffSelf(resource.data.uid);
+      allow create: if staffSelf(request.resource.data.uid)
+        && request.resource.data.keys().hasOnly(['uid','date','part','note','status','createdAt','createdBy'])
+        && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.part in ['full','am','pm']
+        && request.resource.data.note is string && request.resource.data.note.size() <= 200
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdBy == request.auth.uid && request.resource.data.createdAt == request.time;
+      allow update: if admin() && (
+        (resource.data.status == 'pending'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','reviewedBy','reviewedAt'])
+          && request.resource.data.reviewedBy == request.auth.uid && request.resource.data.reviewedAt == request.time
+          && (request.resource.data.status == 'rejected' || (request.resource.data.status == 'approved' && leaveApplied(id,resource.data,false))))
+        || (resource.data.status == 'approved' && request.resource.data.status == 'cancelled'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','cancelledBy','cancelledAt'])
+          && request.resource.data.cancelledBy == request.auth.uid && request.resource.data.cancelledAt == request.time
+          && leaveApplied(id,resource.data,true)));
+    }
     match /shifts/{shiftId} {
       allow read: if member();
       allow create, update: if admin()

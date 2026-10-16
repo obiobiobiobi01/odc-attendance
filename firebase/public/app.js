@@ -1,3 +1,4 @@
+import { setupLeave } from './leave-ui.js';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFirestore, doc, collection, onSnapshot, getDoc, setDoc, serverTimestamp, runTransaction } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
@@ -9,15 +10,16 @@ const ADMIN = 'omotesandodc@gmail.com', $ = id => document.getElementById(id);
 const base = {staff: ['スタッフA','スタッフB','スタッフC','スタッフD','スタッフE','スタッフF'], emails: Array(6).fill(''), patterns: {early:['09:00','18:00',60],normal:['09:30','18:30',60],late:['10:00','19:00',60]}};
 const labels = {normal:'普通',early:'早番',late:'遅番',off:'休日',leave:'有給',unset:'未登録'};
 const marks = {normal:'',early:'早',late:'遅',off:'休',leave:'有',unset:'·'};
-let config = structuredClone(base), shifts = {}, unsubscribers = [], generation = 0, admin = false, ready = false;
+let leaveDays={}, config = structuredClone(base), shifts = {}, unsubscribers = [], generation = 0, admin = false, ready = false;
 let y = new Date().getFullYear(), m = new Date().getMonth(), selected = '';
 const pad = n => String(n).padStart(2,'0'), dateKey = d => `${y}-${pad(m+1)}-${pad(d)}`;
 const message = s => { $('status').textContent = s; };
 let punchState = null, punchReady = false, punchBusy = false;
+const leaveManager=setupLeave({db,auth});
 const attendanceReport=setupAttendance({db,auth,getConfig:()=>config,download});
 const workDay = () => Math.floor((Date.now() + 9*3600000)/86400000);
 function clearData() {
-  attendanceReport.reset();
+  attendanceReport.reset();leaveManager.reset();leaveDays={};
   punchState = null; punchReady = false; renderPunch();
   $('punchHistory').replaceChildren();
   unsubscribers.forEach(f => f()); unsubscribers = []; ready = false;
@@ -55,6 +57,7 @@ onAuthStateChanged(auth, async user => {
       if(current!==generation)return;
     }
     attendanceReport.reset(admin,staffSlot>=0?user.uid:null);
+    leaveManager.reset(admin,staffSlot>=0?user.uid:null);
     unsubscribers.push(onSnapshot(ref, snap => {
       if (current !== generation) return;
       if (!snap.exists()) { failed({code:'permission-denied'}); return; }
@@ -76,6 +79,7 @@ onAuthStateChanged(auth, async user => {
         $('punchHistory').append(line);
       });
     }, e => { if(current===generation) $('punchStatus').textContent=`履歴を読み込めません（${e.code}）。`; }));
+    unsubscribers.push(onSnapshot(collection(db,'leaveDays'),snap=>{if(current!==generation)return;leaveDays=Object.fromEntries(snap.docs.map(d=>{const v=d.data();return [v.date+'_'+v.slot,v];}));render();},failed));
     unsubscribers.push(onSnapshot(collection(db,'shifts'), snap => {
       if (current !== generation) return;
       shifts = Object.fromEntries(snap.docs.map(d => [d.id,d.data()])); ready = true;
@@ -93,8 +97,10 @@ function render() {
     for (let i=0;i<6;i++) {
       const id = dateKey(d)+'_'+i, value = shifts[id] || {type:'unset',phone:false};
       const b = document.createElement('button'); b.className = 'shift '+value.type; b.textContent = marks[value.type]; b.disabled = !admin || !ready;
+      const leave=leaveDays[id],leaveMark=leave?.am&&leave?.pm?'有':leave?.am?'午前有':leave?.pm?'午後有':'';
+      if(leaveMark){b.textContent=leaveMark;if(leave.am&&leave.pm)b.className='shift leave';}
       if (value.phone) { const mark = document.createElement('span'); mark.className='phone-mark'; mark.textContent='電'; b.append(mark); }
-      b.setAttribute('aria-label',`${dateKey(d)} ${config.staff[i]} ${labels[value.type]}${value.phone?' 電話番':''}`);
+      b.setAttribute('aria-label',`${dateKey(d)} ${config.staff[i]} ${labels[value.type]}${leaveMark?' 承認済み有給 '+leaveMark:''}${value.phone?' 電話番':''}`);
       b.onclick = () => { selected=id; $('dialogTitle').textContent=`${m+1}月${d}日・${config.staff[i]}`; $('type').value=value.type; $('phone').checked=value.phone; $('dialog').showModal(); };
       cell('','').append(b);
     }
@@ -158,7 +164,7 @@ function download(name, content, type) {
 $('export').onclick=()=>{
   if(!ready)return;
   const rows=[['日付','曜日',...config.staff]];
-  for(let d=1;d<=new Date(y,m+1,0).getDate();d++) rows.push([dateKey(d),'日月火水木金土'[new Date(y,m,d).getDay()],...config.staff.map((_,i)=>{const s=shifts[dateKey(d)+'_'+i]||{type:'unset'};return labels[s.type]+(s.phone?'・電話番':'');})]);
+  for(let d=1;d<=new Date(y,m+1,0).getDate();d++) rows.push([dateKey(d),'日月火水木金土'[new Date(y,m,d).getDay()],...config.staff.map((_,i)=>{const key=dateKey(d)+'_'+i,s=shifts[key]||{type:'unset'},leave=leaveDays[key];const label=leave?.am&&leave?.pm?'有給':labels[s.type]+(leave?.am?'・午前有給':leave?.pm?'・午後有給':'');return label+(s.phone?'・電話番':'');})]);
   const escape=v=>'"'+String(v).replace(/^[=+@-]/,"'$&").replace(/"/g,'""')+'"';
   download(`ODC_シフト_${y}_${pad(m+1)}.csv`,rows.map(r=>r.map(escape).join(',')).join('\r\n'),'text/csv;charset=utf-8');
 };
