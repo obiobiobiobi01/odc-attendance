@@ -193,7 +193,7 @@ service cloud.firestore {
       allow create: if staffSelf(request.resource.data.uid)
         && request.resource.data.keys().hasOnly(['uid','date','part','note','status','createdAt','createdBy'])
         && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-        && request.resource.data.part in ['full','am','pm']
+        && request.resource.data.part == 'full'
         && request.resource.data.note is string && request.resource.data.note.size() <= 200
         && request.resource.data.status == 'pending'
         && request.resource.data.createdBy == request.auth.uid && request.resource.data.createdAt == request.time;
@@ -201,7 +201,7 @@ service cloud.firestore {
         (resource.data.status == 'pending'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','reviewedBy','reviewedAt'])
           && request.resource.data.reviewedBy == request.auth.uid && request.resource.data.reviewedAt == request.time
-          && (request.resource.data.status == 'rejected' || (request.resource.data.status == 'approved' && leaveApplied(id,resource.data,false))))
+          && (request.resource.data.status == 'rejected' || (request.resource.data.status == 'approved' && resource.data.part == 'full' && leaveApplied(id,resource.data,false))))
         || (resource.data.status == 'approved' && request.resource.data.status == 'cancelled'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','cancelledBy','cancelledAt'])
           && request.resource.data.cancelledBy == request.auth.uid && request.resource.data.cancelledAt == request.time

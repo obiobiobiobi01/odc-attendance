@@ -18,7 +18,7 @@ export function setupLeave({db,auth}){
         const balance=balanceMap.get(profile.id),tr=document.createElement('tr');cell(tr,profile.data().name);cell(tr,balance?`${balance.units/2}日`:'未設定');
         const td=cell(tr,'');
         if(admin){
-          const input=document.createElement('input');input.type='number';input.min='0';input.step='0.5';input.placeholder='残日数';input.value=balance?balance.units/2:'';input.setAttribute('aria-label',profile.data().name+' 有給残日数');
+          const input=document.createElement('input');input.type='number';input.min='0';input.step='1';input.placeholder='残日数';input.value=balance?balance.units/2:'';input.setAttribute('aria-label',profile.data().name+' 有給残日数');
           const reason=document.createElement('input');reason.placeholder='設定理由（初期設定・付与など）';reason.maxLength=200;reason.setAttribute('aria-label',profile.data().name+' 残日数の設定理由');
           const button=document.createElement('button');button.textContent='残日数を保存';button.onclick=()=>act(async()=>{
             if(input.value.trim()==='')throw Error('残日数を入力してください。');
@@ -53,6 +53,6 @@ export function setupLeave({db,auth}){
     }catch(e){if(current===version)$('leaveHistory').textContent=`履歴を取得できません：${e.code||e.message}`;}
   }
   $('leaveRefresh').onclick=refresh;
-  $('leaveSubmit').onclick=()=>act(()=>requestLeave({db,uid,date:$('leaveDate').value,part:$('leavePart').value,note:$('leaveNote').value}),'有給を申請しました。承認までは残日数とシフトは変わりません。');
+  $('leaveSubmit').onclick=()=>act(()=>requestLeave({db,uid,date:$('leaveDate').value,part:'full',note:$('leaveNote').value}),'有給を申請しました。承認までは残日数とシフトは変わりません。');
   reset();return {reset};
 }

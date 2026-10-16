@@ -2,13 +2,13 @@ import {doc,collection,runTransaction,serverTimestamp} from 'https://www.gstatic
 export const leaveLabels={full:'1日',am:'半日（午前）',pm:'半日（午後）'};
 export function validLeaveDate(date){return /^\d{4}-\d{2}-\d{2}$/.test(date)&&Number.isFinite(Date.parse(date))&&new Date(date+'T00:00:00Z').toISOString().slice(0,10)===date;}
 export async function requestLeave({db,uid,date,part,note=''}){
-  if(!validLeaveDate(date)||!leaveLabels[part])throw Error('日付と取得区分を選んでください。');
+  if(!validLeaveDate(date)||part!=='full')throw Error('日付と取得区分を選んでください。');
   if(note.length>200)throw Error('備考は200文字以内で入力してください。');
   const ref=doc(collection(db,'leaveRequests'));
   await runTransaction(db,async tx=>{tx.set(ref,{uid,date,part,note:note.trim(),status:'pending',createdAt:serverTimestamp(),createdBy:uid});});
 }
 export async function setLeaveBalance({db,uid,adminUid,days,expected,reason}){
-  if(!Number.isFinite(days)||days<0||!Number.isInteger(days*2))throw Error('残日数は0以上、0.5日単位で入力してください。');
+  if(!Number.isFinite(days)||days<0||!Number.isInteger(days))throw Error('残日数は0以上、1日単位で入力してください。');
   if(!reason.trim()||reason.length>200)throw Error('設定理由を200文字以内で入力してください。');
   const ref=doc(db,'leaveBalances',uid),log=doc(collection(db,'leaveBalances',uid,'history'));
   await runTransaction(db,async tx=>{
@@ -26,6 +26,7 @@ export async function decideLeave({db,id,action,adminUid}){
     const r=snap.data();
     if(!validLeaveDate(r.date)||!leaveLabels[r.part])throw Error('申請の日付・取得区分が不正です。');
     if(r.status!==(action==='cancel'?'approved':'pending'))throw Error('処理済みです。一覧を更新してください。');
+    if(action==='approve'&&r.part!=='full')throw Error('有給は1日単位です。半日の申請は却下し、1日で再申請してください。');
     if(action==='reject'){tx.update(ref,{status:'rejected',reviewedBy:adminUid,reviewedAt:serverTimestamp()});return;}
     const balanceRef=doc(db,'leaveBalances',r.uid),calendarRef=doc(db,'leaveDays',r.uid+'_'+r.date);
     const [balanceSnap,calendarSnap,profileSnap,configSnap]=await Promise.all([tx.get(balanceRef),tx.get(calendarRef),tx.get(doc(db,'staffProfiles',r.uid)),tx.get(doc(db,'settings','clinic'))]);
