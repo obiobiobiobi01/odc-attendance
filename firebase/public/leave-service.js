@@ -7,15 +7,14 @@ export async function requestLeave({db,uid,date,part,note=''}){
   const ref=doc(collection(db,'leaveRequests'));
   await runTransaction(db,async tx=>{tx.set(ref,{uid,date,part,note:note.trim(),status:'pending',createdAt:serverTimestamp(),createdBy:uid});});
 }
-export async function setLeaveBalance({db,uid,adminUid,days,expected,reason}){
+export async function setLeaveBalance({db,uid,adminUid,days,expected}){
   if(!Number.isFinite(days)||days<0||!Number.isInteger(days))throw Error('残日数は0以上、1日単位で入力してください。');
-  if(!reason.trim()||reason.length>200)throw Error('設定理由を200文字以内で入力してください。');
   const ref=doc(db,'leaveBalances',uid),log=doc(collection(db,'leaveBalances',uid,'history'));
   await runTransaction(db,async tx=>{
     const snap=await tx.get(ref),before=snap.exists()?snap.data():null;
     if((before?.updatedAt?.toMillis()??null)!==(expected?.updatedAt?.toMillis()??null))throw Error('残日数が更新されました。一覧を更新してください。');
     tx.set(ref,{units:days*2,updatedBy:adminUid,updatedAt:serverTimestamp()});
-    tx.set(log,{before:before?.units??null,after:days*2,reason:reason.trim(),updatedBy:adminUid,updatedAt:serverTimestamp()});
+    tx.set(log,{before:before?.units??null,after:days*2,reason:before?'残日数の変更':'初期設定',updatedBy:adminUid,updatedAt:serverTimestamp()});
   });
 }
 export async function decideLeave({db,id,action,adminUid}){

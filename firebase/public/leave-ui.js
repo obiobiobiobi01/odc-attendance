@@ -19,11 +19,10 @@ export function setupLeave({db,auth}){
         const td=cell(tr,'');
         if(admin){
           const input=document.createElement('input');input.type='number';input.min='0';input.step='1';input.placeholder='残日数';input.value=balance?balance.units/2:'';input.setAttribute('aria-label',profile.data().name+' 有給残日数');
-          const reason=document.createElement('input');reason.placeholder='設定理由（初期設定・付与など）';reason.maxLength=200;reason.setAttribute('aria-label',profile.data().name+' 残日数の設定理由');
           const button=document.createElement('button');button.textContent='残日数を保存';button.onclick=()=>act(async()=>{
             if(input.value.trim()==='')throw Error('残日数を入力してください。');
-            await setLeaveBalance({db,uid:profile.id,adminUid:auth.currentUser.uid,days:Number(input.value),expected:balance,reason:reason.value});
-          },'残日数を保存しました。');td.append(input,reason,button);
+            await setLeaveBalance({db,uid:profile.id,adminUid:auth.currentUser.uid,days:Number(input.value),expected:balance});
+          },'残日数を保存しました。');td.append(input,button);
         }
         const history=document.createElement('button');history.textContent='残日数の履歴';history.onclick=()=>showHistory(profile.id,profile.data().name);td.append(history);$('leaveBalances').append(tr);
       }

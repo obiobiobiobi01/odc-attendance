@@ -53,7 +53,7 @@ try{
  const manager=setupLeave({db,auth:{currentUser:{uid:'admin'}}});manager.reset(true);
  for(let i=0;i<100&&$('leaveRefresh').disabled;i++)await new Promise(r=>setTimeout(r,20));
  assert.equal($('leavePanel').hidden,false);assert.match($('leaveBalances').textContent,/0日/);assert.match($('leaveRequests').textContent,/承認待ち/);
- const inputs=$('leaveBalances').querySelectorAll('input');inputs[0].value='4';inputs[1].value='付与';await [...$('leaveBalances').querySelectorAll('button')].find(b=>b.textContent==='残日数を保存').onclick();
+ const inputs=$('leaveBalances').querySelectorAll('input');inputs[0].value='4';assert.equal(inputs.length,1);await [...$('leaveBalances').querySelectorAll('button')].find(b=>b.textContent==='残日数を保存').onclick();
  assert.equal((await getDoc(balanceRef)).data().units,8);assert.match($('leaveBalances').textContent,/4日/);
  manager.reset();assert.equal($('leavePanel').hidden,true);dom.window.close();
  console.log('PASS leave UI: balance table, requests, admin balance setting, logout clear');
