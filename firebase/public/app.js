@@ -1,4 +1,5 @@
 import { setupLeave } from './leave-ui.js';
+import {getFunctions,httpsCallable} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFirestore, doc, collection, onSnapshot, getDoc, setDoc, serverTimestamp, runTransaction } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
@@ -6,6 +7,19 @@ import { setupAttendance } from './admin-attendance.js';
 import { firebaseConfig } from './firebase-config.js';
 
 const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
+const clinicPunch=httpsCallable(getFunctions(app,'asia-northeast1'),'clinicPunch');
+document.querySelector('.warning').textContent='出勤・退勤は院内回線から1日1回ずつ、日本時間で記録します。自分の打刻は修正申請できます。管理者の承認後に正式な記録へ反映します。';
+const networkCheck=document.createElement('button');
+networkCheck.textContent='院内回線を確認';
+document.getElementById('clockOut').after(networkCheck);
+const networkStatus=document.createElement('p');
+networkStatus.setAttribute('role','status');networkCheck.parentElement.after(networkStatus);
+networkCheck.onclick=async()=>{
+  networkCheck.disabled=true;networkStatus.textContent='回線を確認中…';
+  try{const result=await clinicPunch({kind:'check'});networkStatus.textContent=result.data.allowed?'院内回線です。打刻できます。':'院内回線として確認できません。院内Wi-Fiに接続してください。';}
+  catch(e){networkStatus.textContent=`回線を確認できませんでした：${e.message}`;}
+  finally{networkCheck.disabled=false;}
+};
 const ADMIN = 'omotesandodc@gmail.com', $ = id => document.getElementById(id);
 const base = {staff: ['スタッフA','スタッフB','スタッフC','スタッフD','スタッフE','スタッフF'], emails: Array(6).fill(''), patterns: {early:['09:00','18:00',60],normal:['09:30','18:30',60],late:['10:00','19:00',60]}};
 const labels = {normal:'普通',early:'早番',late:'遅番',off:'休日',leave:'有給',unset:'未登録'};
@@ -19,6 +33,7 @@ const leaveManager=setupLeave({db,auth});
 const attendanceReport=setupAttendance({db,auth,getConfig:()=>config,download});
 const workDay = () => Math.floor((Date.now() + 9*3600000)/86400000);
 function clearData() {
+  networkStatus.textContent='';
   attendanceReport.reset();leaveManager.reset();leaveDays={};
   punchState = null; punchReady = false; renderPunch();
   $('punchHistory').replaceChildren();
@@ -186,23 +201,10 @@ async function punch(kind) {
   if(kind==='out' && !confirm('退勤を記録しますか？')) return;
   punchBusy=true; renderPunch(); $('punchStatus').textContent='打刻を保存中…';
   try {
-    const ref=doc(db,'attendance',user.uid), day=workDay();
-    await runTransaction(db, async tx=>{
-      const snap=await tx.get(ref), previous=snap.exists()?snap.data():null;
-      let data;
-      if(kind==='in') {
-        if(previous && (!previous.clockOut || previous.day>=day)) throw new Error('すでに出勤済みです。本日は再出勤できません。');
-        data={day,clockIn:serverTimestamp(),clockOut:null};
-      } else {
-        if(!previous || previous.clockOut) throw new Error('退勤済み、または出勤記録がありません。');
-        data={...previous,clockOut:serverTimestamp()};
-      }
-      tx.set(ref,data);
-      tx.set(doc(db,'attendance',user.uid,'days',String(data.day)),data);
-    });
+    await clinicPunch({kind});
     if(current===generation) message(`${kind==='in'?'出勤':'退勤'}を保存しました。`);
   } catch(e) {
-    if(current===generation) message(e.code ? `打刻できませんでした（${e.code}）。通信・端末の日付を確認してください。保存済みか履歴を確認してから再度お試しください。` : e.message);
+    if(current===generation) message(['functions/permission-denied','functions/failed-precondition','functions/unauthenticated'].includes(e.code)?e.message:`打刻できませんでした。通信を確認し、保存済みか履歴を確認してから再度お試しください。（${e.code||'error'}）`);
   } finally { punchBusy=false; renderPunch(); }
 }
 $('clockIn').onclick=()=>punch('in');

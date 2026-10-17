@@ -95,12 +95,7 @@ service cloud.firestore {
     }
     match /attendance/{uid} {
       allow read: if admin() || staffSelf(uid);
-      allow create: if staffSelf(uid) && validStart(request.resource.data)
-        && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data;
-      allow update: if staffSelf(uid)
-        && (validEnd() || (resource.data.clockOut != null
-          && request.resource.data.day > resource.data.day && validStart(request.resource.data)))
-        && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data;
+      // Normal punching is server-only. Admin corrections still require an audit record.
       allow create: if validCorrection(uid)
         && getAfter(/databases/$(database)/documents/attendance/$(uid)/days/$(string(request.resource.data.day))).data == request.resource.data;
       allow update: if validCorrection(uid)
@@ -147,11 +142,6 @@ service cloud.firestore {
             ? getAfter(/databases/$(database)/documents/attendance/$(uid)).data == request.resource.data
             : getAfter(/databases/$(database)/documents/attendance/$(uid)).data.day > request.resource.data.day && request.resource.data.clockOut != null);
         allow read: if admin() || staffSelf(uid);
-        allow create: if staffSelf(uid) && validStart(request.resource.data)
-          && day == string(request.resource.data.day)
-          && getAfter(/databases/$(database)/documents/attendance/$(uid)).data == request.resource.data;
-        allow update: if staffSelf(uid) && validEnd()
-          && getAfter(/databases/$(database)/documents/attendance/$(uid)).data == request.resource.data;
       }
     }
     match /leaveBalances/{uid} {
